@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.transactionguard.domain.AccountBalance;
 import com.transactionguard.domain.TransactionRecord;
 import com.transactionguard.domain.TransactionRequest;
+import com.transactionguard.domain.TransactionStatus;
 import com.transactionguard.domain.TransactionTransition;
 import com.transactionguard.ingestion.SubmissionOutcome;
 import com.transactionguard.ingestion.TransactionFeedService;
@@ -23,9 +24,13 @@ import org.junit.jupiter.api.BeforeEach;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.ActiveProfiles;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.util.Arrays;
+import java.util.EnumSet;
 import java.util.List;
 
 /**
@@ -62,6 +67,19 @@ public abstract class IntegrationTestSupport {
     protected ProcessingMetrics metrics;
     @Autowired
     protected ObjectMapper objectMapper;
+    @Autowired
+    protected PlatformTransactionManager transactionManager;
+
+    /**
+     * Claims a record directly, bypassing the worker. Used to simulate a worker that
+     * claimed a record and then died, leaving it in {@code PROCESSING}.
+     */
+    protected int claim(Long recordId, Instant claimedAt, TransactionStatus... claimable) {
+        TransactionTemplate template = new TransactionTemplate(transactionManager);
+        Integer updated = template.execute(status -> transactions.claim(recordId,
+                TransactionStatus.PROCESSING, EnumSet.copyOf(List.of(claimable)), claimedAt));
+        return updated == null ? 0 : updated;
+    }
 
     @BeforeEach
     void resetDatabase() {

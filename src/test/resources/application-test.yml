@@ -25,6 +25,12 @@ transactionguard:
     scope: GLOBAL
   ingestion:
     startup-file: ""
+  # Tests call the recovery service explicitly; the background sweep and startup
+  # runner are disabled so they cannot race assertions.
+  recovery:
+    enabled: false
+    stale-claim-timeout: 5m
+    interval-ms: 100000
   simulation:
     transient-failures: {}
 

@@ -23,6 +23,8 @@ public class ProcessingMetrics {
     private final Counter processed;
     private final Counter retryScheduled;
     private final Counter claimSkipped;
+    private final Counter requeued;
+    private final Counter staleClaimsRecovered;
 
     public ProcessingMetrics(MeterRegistry registry, TransactionRecordRepository transactions) {
         this.accepted = counter(registry, "accepted");
@@ -32,6 +34,8 @@ public class ProcessingMetrics {
         this.processed = counter(registry, "processed");
         this.retryScheduled = counter(registry, "retry_scheduled");
         this.claimSkipped = counter(registry, "claim_skipped");
+        this.requeued = counter(registry, "requeued");
+        this.staleClaimsRecovered = counter(registry, "stale_claim_recovered");
 
         for (TransactionStatus status : TransactionStatus.values()) {
             Gauge.builder("transactionguard.transactions.current", transactions,
@@ -77,6 +81,14 @@ public class ProcessingMetrics {
         claimSkipped.increment();
     }
 
+    public void transactionRequeued() {
+        requeued.increment();
+    }
+
+    public void staleClaimRecovered() {
+        staleClaimsRecovered.increment();
+    }
+
     public double acceptedCount() {
         return accepted.count();
     }
@@ -99,5 +111,13 @@ public class ProcessingMetrics {
 
     public double failedCount() {
         return failed.count();
+    }
+
+    public double requeuedCount() {
+        return requeued.count();
+    }
+
+    public double staleClaimRecoveredCount() {
+        return staleClaimsRecovered.count();
     }
 }

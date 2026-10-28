@@ -5,6 +5,7 @@ import com.transactionguard.domain.TransactionStatus;
 import com.transactionguard.domain.TransitionReason;
 import com.transactionguard.ingestion.SubmissionOutcome;
 import com.transactionguard.ingestion.TransactionFeedService;
+import com.transactionguard.processing.TransactionRecoveryService;
 import com.transactionguard.validation.RequestValidationException;
 import com.transactionguard.validation.ValidationIssue;
 import org.springframework.http.HttpStatus;
@@ -43,10 +44,14 @@ public class TransactionController {
 
     private final TransactionFeedService feedService;
     private final TransactionQueryService queryService;
+    private final TransactionRecoveryService recoveryService;
 
-    public TransactionController(TransactionFeedService feedService, TransactionQueryService queryService) {
+    public TransactionController(TransactionFeedService feedService,
+                                 TransactionQueryService queryService,
+                                 TransactionRecoveryService recoveryService) {
         this.feedService = feedService;
         this.queryService = queryService;
+        this.recoveryService = recoveryService;
     }
 
     @PostMapping
@@ -64,6 +69,19 @@ public class TransactionController {
         }
         return ResponseEntity.status(HttpStatus.MULTI_STATUS)
                 .body(BatchSubmissionResponse.of(feedService.ingestAll(batch.transactions())));
+    }
+
+    /**
+     * Operator action: moves a {@code FAILED} transaction back into the retry pipeline
+     * with a fresh retry budget. The record keeps its sequence slot and is processed
+     * out of stream order, which is the deliberate cost of not deadlocking the stream
+     * on a failure. The requeue itself is written to the audit trail.
+     */
+    @PostMapping("/{transactionId}/requeue")
+    public ResponseEntity<TransactionDetail> requeue(@PathVariable String transactionId) {
+        recoveryService.requeue(transactionId);
+        return ResponseEntity.status(HttpStatus.ACCEPTED)
+                .body(queryService.findByTransactionId(transactionId));
     }
 
     @GetMapping("/{transactionId}")

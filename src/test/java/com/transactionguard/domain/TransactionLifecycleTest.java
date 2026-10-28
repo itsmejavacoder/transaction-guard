@@ -28,10 +28,20 @@ class TransactionLifecycleTest {
     void terminalStatusesHaveNoSuccessors() {
         for (TransactionStatus status : new TransactionStatus[]{
                 TransactionStatus.PROCESSED, TransactionStatus.REJECTED,
-                TransactionStatus.FAILED, TransactionStatus.DUPLICATE}) {
+                TransactionStatus.DUPLICATE}) {
             assertThat(status.isTerminal()).isTrue();
             assertThat(TransactionLifecycle.successorsOf(status)).isEmpty();
         }
+        assertThat(TransactionStatus.FAILED.isTerminal()).isTrue();
+    }
+
+    @Test
+    void failedCanOnlyBeRecoveredByAnExplicitRequeue() {
+        assertThat(TransactionLifecycle.isAllowed(TransactionStatus.FAILED, TransactionStatus.RETRY_PENDING)).isTrue();
+        assertThat(TransactionLifecycle.successorsOf(TransactionStatus.FAILED))
+                .containsExactly(TransactionStatus.RETRY_PENDING);
+        assertThat(TransactionLifecycle.isAllowed(TransactionStatus.FAILED, TransactionStatus.PROCESSING)).isFalse();
+        assertThat(TransactionLifecycle.isAllowed(TransactionStatus.FAILED, TransactionStatus.PROCESSED)).isFalse();
     }
 
     @Test

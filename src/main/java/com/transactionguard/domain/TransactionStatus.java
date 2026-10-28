@@ -32,7 +32,7 @@ public enum TransactionStatus {
     DUPLICATE(true),
     /** Rejected by validation or a terminal business rule; terminal, no effect. */
     REJECTED(true),
-    /** Retry budget exhausted; terminal, no effect. */
+    /** Retry budget exhausted; terminal for the automatic pipeline, recoverable by an operator requeue. */
     FAILED(true);
 
     private final boolean terminal;

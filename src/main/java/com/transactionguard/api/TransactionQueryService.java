@@ -1,5 +1,6 @@
 package com.transactionguard.api;
 
+import com.transactionguard.domain.TransactionNotFoundException;
 import com.transactionguard.domain.TransactionRecord;
 import com.transactionguard.domain.TransactionStatus;
 import com.transactionguard.persistence.LedgerEntryRepository;
@@ -34,8 +35,7 @@ public class TransactionQueryService {
     @Transactional(readOnly = true)
     public TransactionDetail findByTransactionId(String transactionId) {
         TransactionRecord record = transactions.findByTransactionId(transactionId)
-                .orElseThrow(() -> new ResourceNotFoundException(
-                        "Transaction not found: " + transactionId));
+                .orElseThrow(() -> new TransactionNotFoundException(transactionId));
         return toDetail(record);
     }
 

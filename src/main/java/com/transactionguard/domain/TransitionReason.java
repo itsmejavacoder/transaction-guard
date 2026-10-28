@@ -21,6 +21,10 @@ public final class TransitionReason {
     public static final String BUSINESS_RULE_VIOLATION = "BUSINESS_RULE_VIOLATION";
     public static final String VALIDATION_FAILED = "VALIDATION_FAILED";
     public static final String STREAM_ADVANCED = "STREAM_ADVANCED";
+    /** An operator explicitly moved a FAILED record back into the retry pipeline. */
+    public static final String MANUAL_REQUEUE = "MANUAL_REQUEUE";
+    /** A PROCESSING claim outlived its visibility timeout and was handed back to the worker. */
+    public static final String STALE_CLAIM_RECOVERED = "STALE_CLAIM_RECOVERED";
 
     private TransitionReason() {
     }

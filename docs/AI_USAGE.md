@@ -13,7 +13,7 @@ It is written so a reviewer can reproduce the workflow and audit the result.
 | Implementation partner | AI coding agent (DeepSeek V4.1 Flash) inside an agentic IDE harness with file, shell and Maven access |
 | Requirements | Assessment `.docx`, converted to plain text and read directly |
 | Build / test | Maven 3.9.9, JDK 21 (Temurin), Spring Boot 3.5.16 |
-| Verification | `mvn test` (85 tests), real HTTP calls against the running jar, log inspection |
+| Verification | `mvn test` (95 tests), real HTTP calls against the running jar, log inspection |
 
 No external services, no paid APIs, no code generators beyond the AI agent. The project is
 self-contained and runs offline once dependencies are cached.
@@ -124,7 +124,8 @@ an audit trail. That collides with `(stream_id, sequence_number)`, which is owne
 original record.
 
 **Fix.** `AdmissionDecision` distinguishes "rejected and recorded" from "rejected and not
-recorded". A stale delivery returns `recorded=false` and the API answers `422`.
+recorded". A stale delivery returns `recorded=false` and the API answers `409` with code
+`STALE_SEQUENCE` — a sequence conflict, not a rule rejection.
 
 ### 4.4 Assertions that were stricter than the guarantee
 
@@ -136,6 +137,26 @@ effect, eleven duplicate attempts", not "which lookup won".
 That correction is a good example of the review rule applied throughout: **when a test and
 the design disagree, decide which one is wrong** instead of loosening the assertion until it
 passes.
+
+### 4.5 A resilience gap found by re-reading the assessment
+
+**Symptom.** The first submission satisfied every functional requirement and every retry
+scenario, but NFR 6.3 says failed records must be *traceable and recoverable*. The audit trail
+made them traceable; nothing made them recoverable. A `FAILED` record consumed its sequence
+and stayed terminal forever unless an operator edited the database by hand.
+
+**Fix.** Two explicit recovery paths were added, without changing the schema:
+
+* `POST /api/v1/transactions/{id}/requeue` — the only transition out of `FAILED`
+  (`MANUAL_REQUEUE`): resets the retry budget and re-enters `RETRY_PENDING`;
+* a stale-claim sweep — a `PROCESSING` row whose worker died is returned to
+  `RETRY_PENDING` after `transactionguard.recovery.stale-claim-timeout` (default `5m`), or
+  marked `FAILED` with `STALE_CLAIM_EXHAUSTED` if the budget is already spent.
+
+Both paths reuse the idempotent gateway, so retrying an abandoned claim cannot double-book.
+`RecoveryIntegrationTest` and four new API cases lock the behaviour in. This is also an
+example of the AI's initial scope being corrected by the requirement text rather than by a
+failing test: the gap was found by reading the assessment again, not by the build going red.
 
 ---
 
@@ -172,14 +193,16 @@ architecture decisions above are the ones a reviewer should probe in the intervi
 ## 7. Reproducing the verification
 
 ```cmd
-cd D:\mydev\assesment
-mvnw.cmd test                                                                  :: 85 tests
-rmdir /s /q data
-mvnw.cmd spring-boot:run "-Dspring-boot.run.profiles=demo"                     :: sample scenario
+git clone https://github.com/itsmejavacoder/transaction-guard.git
+cd transaction-guard
+mvnw.cmd test                                                       :: 95 tests
+run-demo.cmd                                                        :: sample scenario
 curl -s http://localhost:8080/api/v1/processing/summary
 curl -s http://localhost:8080/api/v1/processing/sequence-gaps
 curl -s http://localhost:8080/api/v1/transactions/TXN-2005
 ```
+
+On macOS/Linux, use `./mvnw test` and `./run-demo.sh` instead.
 
 The captured outputs are in [`SAMPLE_RUN.md`](SAMPLE_RUN.md); the requirement mapping is in
 [`ASSESSMENT.md`](ASSESSMENT.md).

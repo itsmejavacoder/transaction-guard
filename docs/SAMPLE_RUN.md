@@ -523,34 +523,36 @@ and a one-row history. Example:
 ## 3. Test evidence
 
 ```
-[INFO] Tests run: 85, Failures: 0, Errors: 0, Skipped: 0
+[INFO] Tests run: 95, Failures: 0, Errors: 0, Skipped: 0
 [INFO] BUILD SUCCESS
 ```
 
-Per suite (from `target/surefire-reports`, run on 2026-10-28):
+Per suite (from `target/surefire-reports`, run on 2026-10-28 after the recovery changes):
 
 | # | Suite | Tests | Time | What it proves |
 |---|---|---|---|---|
-| 1 | `TransactionRequestValidatorTest` | 12 | 0.02 s | every structural rule, all issues collected, trackability |
-| 2 | `TransactionLifecycleTest` | 4 | 0.06 s | legal/illegal state transitions |
-| 3 | `JsonFileTransactionSourceTest` | 5 | 0.06 s | feed parsing, malformed feeds, duplicate ids inside one file |
-| 4 | `SensitiveDataMaskerTest` | 3 | 0.003 s | account ids are masked in logs |
-| 5 | `IngestionIntegrationTest` | 10 | 1.89 s | accept, replay, ambiguous ids, invalid rows, stale sequences, audit |
-| 6 | `OrderingIntegrationTest` | 7 | 0.60 s | buffering, release, gaps, rejection, failed record advances cursor |
-| 7 | `PerAccountOrderingIntegrationTest` | 2 | 1.43 s | independent streams when `scope=PER_ACCOUNT` |
-| 8 | `OrderIndependenceTest` | 1 | 1.37 s | shuffled feed → identical financial state |
-| 9 | `IdempotencyIntegrationTest` | 4 | 0.37 s | 12 concurrent identical submissions → one effect |
-| 10 | `RetryIntegrationTest` | 5 | 0.28 s | retry-then-success, exhaustion, failure does not block stream |
-| 11 | `RetryBackoffIntegrationTest` | 1 | 1.00 s | a retry is not claimable before its backoff elapses |
-| 12 | `RetryPolicyTest` | 5 | 0.008 s | backoff maths, budget, microsecond rounding |
-| 13 | `ReversalIntegrationTest` | 5 | 0.26 s | reversal rules (original, currency, amount, no reversal-of-reversal) |
-| 14 | `SampleScenarioIntegrationTest` | 3 | 0.41 s | the assessment sample end to end |
-| 15 | `ScheduledWorkerIntegrationTest` | 1 | 1.04 s | no manual trigger: the scheduler drains the feed |
-| 16 | `TransactionApiIntegrationTest` | 17 | 11.88 s | status codes incl. `409`, batch `207`, filters, history |
-| | **Total** | **85** | | |
+| 1 | `TransactionRequestValidatorTest` | 12 | 0.012 s | every structural rule, all issues collected, trackability |
+| 2 | `TransactionLifecycleTest` | 5 | 0.036 s | legal/illegal transitions, operator-only `FAILED` requeue |
+| 3 | `JsonFileTransactionSourceTest` | 5 | 0.089 s | feed parsing, malformed feeds, duplicate ids inside one file |
+| 4 | `SensitiveDataMaskerTest` | 3 | 0.000 s | account ids are masked in logs |
+| 5 | `IngestionIntegrationTest` | 10 | 1.825 s | accept, replay, ambiguous ids, invalid rows, stale sequences, audit |
+| 6 | `OrderingIntegrationTest` | 7 | 0.502 s | buffering, release, gaps, rejection, failed record advances cursor |
+| 7 | `PerAccountOrderingIntegrationTest` | 2 | 1.110 s | independent streams when `scope=PER_ACCOUNT` |
+| 8 | `OrderIndependenceTest` | 1 | 1.417 s | shuffled feed → identical financial state |
+| 9 | `IdempotencyIntegrationTest` | 4 | 0.448 s | 12 concurrent identical submissions → one effect |
+| 10 | `RetryIntegrationTest` | 5 | 0.161 s | retry-then-success, exhaustion, failure does not block stream |
+| 11 | `RetryBackoffIntegrationTest` | 1 | 0.700 s | a retry is not claimable before its backoff elapses |
+| 12 | `RecoveryIntegrationTest` | 5 | 0.218 s | requeue, abandoned-claim recovery, stale budget exhaustion |
+| 13 | `RetryPolicyTest` | 5 | 0.000 s | backoff maths, budget, microsecond rounding |
+| 14 | `ReversalIntegrationTest` | 5 | 0.166 s | reversal rules (original, currency, amount, no reversal-of-reversal) |
+| 15 | `SampleScenarioIntegrationTest` | 3 | 0.287 s | the assessment sample end to end |
+| 16 | `ScheduledWorkerIntegrationTest` | 1 | 0.628 s | no manual trigger: the scheduler drains the feed |
+| 17 | `TransactionApiIntegrationTest` | 21 | 11.230 s | status codes incl. `409`/`404`, batch `207`, filters, history, recovery |
+| | **Total** | **95** | | |
 
-The suite was executed twice back to back with identical results, to catch order-dependent
-flakiness (the Spring context is cached between classes, so shared state matters).
+The pre-recovery suite was executed twice back to back with identical results to catch
+order-dependent flakiness; the current suite was then run again in full after the recovery
+changes.
 
 The concurrency suite is worth calling out explicitly. `IdempotencyIntegrationTest` fires
 12 threads with the same payload and asserts:
@@ -569,9 +571,10 @@ trust any application-level check: it asserts the financial outcome.
 ## 4. Reproducing this document
 
 ```cmd
-cd D:\mydev\assesment
+git clone https://github.com/itsmejavacoder/transaction-guard.git
+cd transaction-guard
 
-:: 1. full test suite (85 tests)
+:: 1. full test suite (95 tests)
 run-tests.cmd
 
 :: 2. the assessment scenario (deletes data\, starts on port 8080)
@@ -583,6 +586,8 @@ curl -s http://localhost:8080/api/v1/processing/sequence-gaps
 curl -s http://localhost:8080/api/v1/transactions/TXN-2004
 curl -s http://localhost:8080/api/v1/transactions/TXN-2005
 ```
+
+On macOS/Linux, use `./run-tests.sh` and `./run-demo.sh`.
 
 For the walkthrough in section 2, start a second instance without the scheduler:
 

@@ -1,6 +1,8 @@
 package com.transactionguard.api;
 
 import com.transactionguard.domain.IllegalStatusTransitionException;
+import com.transactionguard.domain.RequeueNotAllowedException;
+import com.transactionguard.domain.TransactionNotFoundException;
 import com.transactionguard.ingestion.FeedParseException;
 import com.transactionguard.validation.RequestValidationException;
 import com.transactionguard.validation.ValidationIssue;
@@ -41,9 +43,15 @@ public class ApiExceptionHandler {
         return build(HttpStatus.BAD_REQUEST, "VALIDATION_FAILED", ex.getMessage(), request, ex.issues());
     }
 
-    @ExceptionHandler(ResourceNotFoundException.class)
-    public ResponseEntity<ApiError> handleNotFound(ResourceNotFoundException ex, HttpServletRequest request) {
+    @ExceptionHandler(TransactionNotFoundException.class)
+    public ResponseEntity<ApiError> handleNotFound(TransactionNotFoundException ex, HttpServletRequest request) {
         return build(HttpStatus.NOT_FOUND, "NOT_FOUND", ex.getMessage(), request, List.of());
+    }
+
+    @ExceptionHandler(RequeueNotAllowedException.class)
+    public ResponseEntity<ApiError> handleRequeueNotAllowed(RequeueNotAllowedException ex,
+                                                            HttpServletRequest request) {
+        return build(HttpStatus.CONFLICT, "NOT_REQUEUEABLE", ex.getMessage(), request, List.of());
     }
 
     @ExceptionHandler(FeedParseException.class)

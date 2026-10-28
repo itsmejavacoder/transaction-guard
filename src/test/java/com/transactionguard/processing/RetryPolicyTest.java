@@ -71,6 +71,7 @@ class RetryPolicyTest {
                 new TransactionGuardProperties.Retry(maxAttempts, initial, multiplier, max),
                 new TransactionGuardProperties.Ordering(true, OrderingScope.GLOBAL),
                 new TransactionGuardProperties.Simulation(Map.of()),
-                new TransactionGuardProperties.Ingestion("")));
+                new TransactionGuardProperties.Ingestion(""),
+                new TransactionGuardProperties.Recovery(true, Duration.ofMinutes(5), 60_000)));
     }
 }

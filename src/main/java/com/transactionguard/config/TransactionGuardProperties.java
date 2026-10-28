@@ -20,7 +20,8 @@ public record TransactionGuardProperties(
         Retry retry,
         Ordering ordering,
         Simulation simulation,
-        Ingestion ingestion) {
+        Ingestion ingestion,
+        Recovery recovery) {
 
     public TransactionGuardProperties {
         worker = worker == null ? Worker.defaults() : worker;
@@ -28,6 +29,7 @@ public record TransactionGuardProperties(
         ordering = ordering == null ? Ordering.defaults() : ordering;
         simulation = simulation == null ? Simulation.defaults() : simulation;
         ingestion = ingestion == null ? Ingestion.defaults() : ingestion;
+        recovery = recovery == null ? Recovery.defaults() : recovery;
     }
 
     /**
@@ -124,6 +126,35 @@ public record TransactionGuardProperties(
 
         static Ingestion defaults() {
             return new Ingestion("");
+        }
+    }
+
+    /**
+     * Recovery of claims abandoned by a crashed or partitioned worker.
+     *
+     * @param enabled           run the startup sweep and the scheduled sweep
+     * @param staleClaimTimeout how long a record may stay {@code PROCESSING} before it
+     *                          is considered abandoned
+     * @param intervalMs        delay between scheduled sweeps
+     */
+    public record Recovery(
+            @DefaultValue("true") boolean enabled,
+            @DefaultValue("5m") Duration staleClaimTimeout,
+            @DefaultValue("60000") long intervalMs) {
+
+        static Recovery defaults() {
+            return new Recovery(true, Duration.ofMinutes(5), 60_000L);
+        }
+
+        public Recovery {
+            if (staleClaimTimeout == null || staleClaimTimeout.isZero() || staleClaimTimeout.isNegative()) {
+                throw new IllegalArgumentException(
+                        "transactionguard.recovery.stale-claim-timeout must be greater than zero");
+            }
+            if (intervalMs < 1) {
+                throw new IllegalArgumentException(
+                        "transactionguard.recovery.interval-ms must be >= 1");
+            }
         }
     }
 }

@@ -8,6 +8,7 @@
 
 # The POSIX wrapper must stay LF.
 mvnw text eol=lf
+*.sh text eol=lf
 
 # Binary artefacts, should they ever be added by mistake.
 *.jar binary

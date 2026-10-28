@@ -9,11 +9,14 @@ import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMock
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 
+import java.time.Duration;
+import java.time.Instant;
 import java.util.List;
 
 import static com.transactionguard.support.TransactionFixtures.credit;
 import static com.transactionguard.support.TransactionFixtures.debit;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.hamcrest.Matchers.containsString;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
@@ -219,6 +222,55 @@ class TransactionApiIntegrationTest extends IntegrationTestSupport {
         mockMvc.perform(get("/api/v1/transactions/TXN-1"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("PROCESSED"));
+    }
+
+    @Test
+    @DisplayName("a FAILED transaction can be requeued through the API")
+    void requeueFailedTransactionReturns202() throws Exception {
+        gateway.failNext("TXN-1", 99);
+        ingestOne(credit("REQ-1", "TXN-1", "ACC-1", "100.00", 1));
+        drain();
+        assertThat(recordOf("TXN-1").getStatus()).isEqualTo(TransactionStatus.FAILED);
+
+        mockMvc.perform(post("/api/v1/transactions/TXN-1/requeue"))
+                .andExpect(status().isAccepted())
+                .andExpect(jsonPath("$.transactionId").value("TXN-1"))
+                .andExpect(jsonPath("$.status").value("RETRY_PENDING"))
+                .andExpect(jsonPath("$.attemptCount").value(0))
+                .andExpect(jsonPath("$.history[?(@.reason == 'MANUAL_REQUEUE')].reason")
+                        .value(org.hamcrest.Matchers.hasItem("MANUAL_REQUEUE")));
+    }
+
+    @Test
+    void requeueOfNonFailedTransactionReturns409() throws Exception {
+        ingestOne(credit("REQ-1", "TXN-1", "ACC-1", "100.00", 1));
+
+        mockMvc.perform(post("/api/v1/transactions/TXN-1/requeue"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("NOT_REQUEUEABLE"))
+                .andExpect(jsonPath("$.message").value(containsString("RECEIVED")));
+    }
+
+    @Test
+    void requeueOfUnknownTransactionReturns404() throws Exception {
+        mockMvc.perform(post("/api/v1/transactions/DOES-NOT-EXIST/requeue"))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("NOT_FOUND"));
+    }
+
+    @Test
+    @DisplayName("the manual stale-claim sweep returns what it recovered")
+    void recoverStaleClaimsEndpointReturnsReport() throws Exception {
+        ingestOne(credit("REQ-1", "TXN-1", "ACC-1", "100.00", 1));
+        Long recordId = recordOf("TXN-1").getId();
+        claim(recordId, Instant.now().minus(Duration.ofMinutes(10)), TransactionStatus.RECEIVED);
+
+        mockMvc.perform(post("/api/v1/processing/recover-stale"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.recovered").value(1))
+                .andExpect(jsonPath("$.failed").value(0));
+
+        assertThat(recordOf("TXN-1").getStatus()).isEqualTo(TransactionStatus.RETRY_PENDING);
     }
 
     @Test

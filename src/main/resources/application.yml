@@ -57,5 +57,9 @@ transactionguard:
     scope: GLOBAL
   ingestion:
     startup-file: ""
+  recovery:
+    enabled: true
+    stale-claim-timeout: 5m
+    interval-ms: 60000
   simulation:
     transient-failures: {}

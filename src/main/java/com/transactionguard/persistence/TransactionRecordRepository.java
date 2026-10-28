@@ -36,6 +36,12 @@ public interface TransactionRecordRepository extends JpaRepository<TransactionRe
 
     long countByStatus(TransactionStatus status);
 
+    /**
+     * Claims whose owner died mid-cycle. Used by the recovery sweep to hand the
+     * record back to the worker after the visibility timeout has elapsed.
+     */
+    List<TransactionRecord> findByStatusAndUpdatedAtBefore(TransactionStatus status, Instant updatedAt);
+
     @Query("select distinct r.streamId from TransactionRecord r order by r.streamId")
     List<String> findDistinctStreamIds();
 

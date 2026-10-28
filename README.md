@@ -32,6 +32,8 @@ Transaction Processing Service"* (see `docs/ASSESSMENT.md` for the requirement m
    │ Processor                   │  idempotent gateway → ledger + balance → audit
    ├─────────────────────────────┤
    │ Retry / terminal handling   │  RETRY_PENDING with exponential backoff, or FAILED
+   ├─────────────────────────────┤
+   │ Recovery                    │  operator requeue + abandoned-claim sweep
    └─────────────────────────────┘
 ```
 
@@ -44,6 +46,8 @@ Guarantees:
 | No double booking even if the effect succeeded and the DB commit failed | gateway is idempotent per effect key; ledger has a unique constraint on `transaction_id` |
 | Ordering per stream | sequence cursor + `(stream_id, sequence_number)` unique constraint + `PENDING_PREDECESSOR` buffering |
 | No silent stuck stream | sequence gap report + audit trail per state change |
+| A dead worker does not lose a record | `PROCESSING` claims older than the visibility timeout return to `RETRY_PENDING` |
+| A failed record is recoverable | audited operator requeue (`MANUAL_REQUEUE`) with a fresh retry budget |
 | Transient failures are retried, bad data is not | failure classification, exponential backoff, bounded attempts |
 
 ---
@@ -66,11 +70,13 @@ No Lombok, no MapStruct, no XML: the domain is plain Java so the behaviour is ex
 ## 3. Project layout
 
 ```
-D:\mydev\assesment
+transaction-guard/
 ├── pom.xml
 ├── mvnw / mvnw.cmd / .mvn/            Maven wrapper
-├── run-demo.cmd                      one-command demo (Windows)
-├── run-tests.cmd                     full test suite (Windows)
+├── run-demo.cmd / run-demo.sh         one-command demo
+├── run-tests.cmd / run-tests.sh       full test suite
+├── LICENSE                            MIT
+├── .github/workflows/ci.yml           CI: build + tests on push
 ├── docs/
 │   ├── DESIGN.md                     architecture, idempotency, ordering, retry, hardening
 │   ├── AI_USAGE.md                   how AI was used, what was verified
@@ -85,7 +91,7 @@ D:\mydev\assesment
     │   ├── ingestion/                validators entry point, feed service, JSON source, dedupe
     │   ├── observability/            Micrometer counters/gauges, PII masker
     │   ├── persistence/              Spring Data repositories (claim query, gaps, counts)
-    │   ├── processing/               sequence gate, processor, worker, retry policy, gateway
+    │   ├── processing/               sequence gate, processor, worker, recovery, retry policy, gateway
     │   └── validation/               structural validator + issues
     ├── main/resources
     │   ├── application.yml           production-ish defaults
@@ -100,9 +106,21 @@ D:\mydev\assesment
 
 Prerequisites: JDK 21 (`java -version`), no local Maven needed (wrapper included).
 
+```bash
+git clone https://github.com/itsmejavacoder/transaction-guard.git
+cd transaction-guard
+```
+
+On Windows:
+
 ```cmd
-cd D:\mydev\assesment
 mvnw.cmd test
+```
+
+On macOS/Linux:
+
+```bash
+./mvnw test
 ```
 
 Run the service:
@@ -111,18 +129,23 @@ Run the service:
 mvnw.cmd spring-boot:run
 ```
 
+(or `./mvnw spring-boot:run`)
+
 Then submit a transaction (default profile keeps the worker running every 250 ms):
 
-```cmd
-curl -s -X POST http://localhost:8080/api/v1/transactions ^
-  -H "Content-Type: application/json" ^
-  -d "{\"requestId\":\"REQ-100\",\"transactionId\":\"TXN-100\",\"accountId\":\"ACC-1\",\"transactionType\":\"CREDIT\",\"amount\":100.00,\"currency\":\"INR\",\"sequenceNumber\":1,\"eventTime\":\"2026-10-27T10:00:00Z\"}"
+```bash
+curl -s -X POST http://localhost:8080/api/v1/transactions \
+  -H "Content-Type: application/json" \
+  -d '{"requestId":"REQ-100","transactionId":"TXN-100","accountId":"ACC-1","transactionType":"CREDIT","amount":100.00,"currency":"INR","sequenceNumber":1,"eventTime":"2026-10-27T10:00:00Z"}'
 ```
 
-### Interactive API documentation
+On Windows `cmd`, replace `\` with `^` and use double quotes around the JSON body.
+
+### Sample walkthrough
 
 `docs/SAMPLE_RUN.md` contains the full walkthrough with real captured responses
-(accepted, duplicate, invalid, out-of-order, batch, cycle report).
+(accepted, duplicate, invalid, out-of-order, batch, cycle report). The service has no
+generated OpenAPI UI; the walkthrough and the tables below are the API contract.
 
 ---
 
@@ -136,7 +159,7 @@ exactly one transient settlement failure for `TXN-2005`, and sets the retry back
 run-demo.cmd
 ```
 
-or manually:
+On macOS/Linux use `./run-demo.sh`. Or manually:
 
 ```cmd
 rmdir /s /q data
@@ -189,6 +212,9 @@ Why these numbers:
 * `ACC-203`: `+500.00 (TXN-2005)` applied once despite the retry.
 * `TXN-2004` is counted as a transaction but has no ledger entry and no balance row.
 * One duplicate attempt and one retry attempt are visible in the audit trail.
+* `countsByStatus.DUPLICATE` is always `0`: `DUPLICATE` is an API/audit outcome for a
+  replayed request, never a stored record status. Use `duplicateAttempts` (or the audit
+  trail of the original record) to see resend pressure.
 * No sequence gaps: sequence 4 is occupied by the rejected record, so it is not `missing`.
 
 The worker log shows the whole story without any manual trigger:
@@ -230,7 +256,8 @@ Single submit status codes:
 | `400 Bad Request` | structurally invalid, **nothing persisted** |
 | `409 Conflict` | payload is valid but the stream position is already used (`SEQUENCE_CONFLICT`) or already passed (`STALE_SEQUENCE`); nothing persisted |
 | `422 Unprocessable Entity` | well-formed but rejected by a validation or business rule; for trackable rows the refusal is stored as `REJECTED` |
-| `404 Not Found` | unknown transaction id on a read |
+| `404 Not Found` | unknown transaction id on a read or requeue |
+| `409 Conflict` on requeue | the record exists but is not `FAILED` (`NOT_REQUEUEABLE`) |
 
 Duplicate responses also carry the original state so a caller can tell "already done"
 from "in progress":
@@ -256,9 +283,11 @@ from "in progress":
 |---|---|---|
 | `GET` | `/transactions/{transactionId}` | full record, ledger evidence and audit history |
 | `GET` | `/transactions?status=&accountId=&limit=` | filtered list |
+| `POST` | `/transactions/{transactionId}/requeue` | operator recovery: `FAILED` → `RETRY_PENDING` with a fresh retry budget (`202`) |
 | `GET` | `/processing/summary` | status counts, duplicate/retry pressure, balances, gaps |
 | `GET` | `/processing/sequence-gaps` | streams currently blocked by a hole |
 | `POST` | `/processing/cycles` | run one worker cycle synchronously (demos, platforms without a scheduler) |
+| `POST` | `/processing/recover-stale` | run the abandoned-claim sweep now and return `{generatedAt, recovered, failed}` |
 
 Every request is tagged with an `X-Request-Id` (generated when absent) that is returned
 in the response header and appears in every log line as `[req=...]`.
@@ -282,6 +311,9 @@ All settings are bound to `TransactionGuardProperties` (`transactionguard.*`).
 | `transactionguard.ordering.enabled` | `true` | enforce sequence ordering |
 | `transactionguard.ordering.scope` | `GLOBAL` | `GLOBAL` or `PER_ACCOUNT` |
 | `transactionguard.ingestion.startup-file` | empty | optional feed replayed on startup |
+| `transactionguard.recovery.enabled` | `true` | run the startup and scheduled stale-claim sweeps |
+| `transactionguard.recovery.stale-claim-timeout` | `5m` | how long a record may stay `PROCESSING` before it is treated as abandoned |
+| `transactionguard.recovery.interval-ms` | `60000` | delay between scheduled sweeps |
 | `transactionguard.simulation.transient-failures` | empty | `transactionId: failureCount` map for the simulated gateway |
 
 Environment variables work too (`TRANSACTIONGUARD_RETRY_MAX_ATTEMPTS=5`).
@@ -294,12 +326,14 @@ Environment variables work too (`TRANSACTIONGUARD_RETRY_MAX_ATTEMPTS=5`).
 run-tests.cmd
 ```
 
-85 tests, all green in two consecutive full runs (evidence in `docs/SAMPLE_RUN.md`).
+On macOS/Linux use `./run-tests.sh`.
+
+95 tests, all green.
 
 | Suite | Tests | Focus |
 |---|---|---|
 | `TransactionRequestValidatorTest` | 12 | every structural rule, multiple issues per request, trackability |
-| `TransactionLifecycleTest` | 4 | legal/illegal state transitions |
+| `TransactionLifecycleTest` | 5 | legal/illegal state transitions, operator-only `FAILED` requeue |
 | `JsonFileTransactionSourceTest` | 5 | parsing, malformed feeds, duplicate ids inside one file |
 | `SensitiveDataMaskerTest` | 3 | PII masking in logs |
 | `IngestionIntegrationTest` | 10 | accept, replay, ambiguous ids, invalid rows, stale sequences, audit |
@@ -309,11 +343,12 @@ run-tests.cmd
 | `IdempotencyIntegrationTest` | 4 | 12 concurrent identical submissions → one effect |
 | `RetryIntegrationTest` | 5 | retry-then-success, exhaustion, failure does not block stream |
 | `RetryBackoffIntegrationTest` | 1 | retry is not claimable before its backoff elapses |
+| `RecoveryIntegrationTest` | 5 | requeue, stale-claim recovery, budget exhaustion |
 | `ReversalIntegrationTest` | 5 | reversal rules (original, currency, amount, no reversal-of-reversal) |
 | `SampleScenarioIntegrationTest` | 3 | the assessment sample end to end |
 | `ScheduledWorkerIntegrationTest` | 1 | no manual trigger: the scheduler drains the feed |
 | `RetryPolicyTest` | 5 | backoff maths, retry budget, microsecond due-time rounding |
-| `TransactionApiIntegrationTest` | 17 | status codes incl. `409`, batch `207`, filters, validation errors, history |
+| `TransactionApiIntegrationTest` | 21 | status codes incl. `409`/`404`, batch `207`, filters, errors, history, recovery |
 
 Tests use an in-memory H2 database per context, a simulated settlement gateway with
 deterministic fault injection, and Awaitility for the scheduler test.
@@ -339,7 +374,10 @@ The full reasoning is in [`docs/DESIGN.md`](docs/DESIGN.md). The short version:
 4. **Bounded retries with classification.** Transient settlement failures back off
    exponentially up to `FAILED`; business rule violations are terminal immediately and
    never reach the gateway.
-5. **Operable by default.** Structured logs with request ids and masked account ids,
+5. **Recoverable failures.** A `FAILED` record can be requeued by an explicit, audited
+   operator action, and a claim abandoned by a dead worker is returned to the retry
+   pipeline after a visibility timeout.
+6. **Operable by default.** Structured logs with request ids and masked account ids,
    audit rows for every state change, Micrometer counters/gauges, summary and gap
    endpoints.
 

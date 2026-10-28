@@ -28,7 +28,9 @@ public final class TransactionLifecycle {
         ALLOWED.put(TransactionStatus.PROCESSED, EnumSet.noneOf(TransactionStatus.class));
         ALLOWED.put(TransactionStatus.DUPLICATE, EnumSet.noneOf(TransactionStatus.class));
         ALLOWED.put(TransactionStatus.REJECTED, EnumSet.noneOf(TransactionStatus.class));
-        ALLOWED.put(TransactionStatus.FAILED, EnumSet.noneOf(TransactionStatus.class));
+        // FAILED is terminal for the automatic pipeline. The only way out is an explicit
+        // operator requeue, which restarts the retry budget under a fresh audit entry.
+        ALLOWED.put(TransactionStatus.FAILED, EnumSet.of(TransactionStatus.RETRY_PENDING));
     }
 
     private TransactionLifecycle() {

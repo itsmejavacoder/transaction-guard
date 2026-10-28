@@ -196,6 +196,37 @@ public class TransactionRecord {
         this.updatedAt = now;
     }
 
+    /**
+     * Operator-driven recovery of a {@code FAILED} record. The retry budget is reset
+     * because the operator is asserting that the cause has been fixed; the attempt is
+     * still visible as its own audit transition. The sequence is intentionally not
+     * re-reserved: a failed record already consumed its slot, so a requeued record is
+     * processed out of stream order (documented trade-off).
+     */
+    public void markRequeued(Instant now) {
+        TransactionLifecycle.require(status, TransactionStatus.RETRY_PENDING);
+        this.status = TransactionStatus.RETRY_PENDING;
+        this.attemptCount = 0;
+        this.nextAttemptAt = now;
+        this.failureCode = null;
+        this.failureMessage = null;
+        this.updatedAt = now;
+    }
+
+    /**
+     * Returns a claim whose owner disappeared mid-cycle to the worker. The attempt
+     * counter is kept: a record that repeatedly kills its worker must still exhaust
+     * its retry budget instead of being resurrected forever.
+     */
+    public void markStaleClaimRecovered(Instant now) {
+        TransactionLifecycle.require(status, TransactionStatus.RETRY_PENDING);
+        this.status = TransactionStatus.RETRY_PENDING;
+        this.nextAttemptAt = now;
+        this.failureCode = null;
+        this.failureMessage = null;
+        this.updatedAt = now;
+    }
+
     private static String truncate(String message) {
         if (message == null) {
             return null;

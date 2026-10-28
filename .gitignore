@@ -1,7 +1,17 @@
 target/
 data/
 *.log
+
+# IDE metadata
 .idea/
 *.iml
 .vscode/
+.classpath
+.project
+.settings/
+.factorypath
+.metadata/
+
+# OS noise
 .DS_Store
+Thumbs.db

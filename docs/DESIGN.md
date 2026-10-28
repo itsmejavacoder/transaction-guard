@@ -63,6 +63,8 @@ deployment, UI.
                  │ processing/ (background)                                │
                  │  TransactionProcessingWorker  @Scheduled cycle          │
                  │  TransactionProcessor         claim → effect → book     │
+                 │  TransactionRecoveryService   requeue / stale claims    │
+                 │  StaleClaimRecoveryRunner     startup sweep             │
                  │  RetryPolicy, SimulatedSettlementGateway                │
                  │  TransactionTransitionRecorder (audit)                  │
                  └─────────────────────────────────────────────────────────┘
@@ -125,9 +127,10 @@ exhausted). Any `BusinessRuleViolationException` becomes `REJECTED` immediately.
 | `LedgerEntry` | financial evidence of an applied effect | `transaction_id` unique |
 | `AccountBalance` | current balance per account/currency | primary key `account_id` |
 
-`TransactionStatus` is an explicit state machine (`TransactionLifecycle`) with terminal
-states `PROCESSED`, `REJECTED`, `FAILED`, `DUPLICATE`. Illegal transitions throw
-`IllegalStatusTransitionException` instead of silently corrupting state.
+`TransactionStatus` is an explicit state machine (`TransactionLifecycle`). `PROCESSED`,
+`REJECTED` and `DUPLICATE` are terminal. `FAILED` is terminal for the automatic pipeline;
+the single exception is an operator requeue back to `RETRY_PENDING`. Illegal transitions
+throw `IllegalStatusTransitionException` instead of silently corrupting state.
 
 ### 3.2 Status lifecycle
 
@@ -136,9 +139,12 @@ states `PROCESSED`, `REJECTED`, `FAILED`, `DUPLICATE`. Illegal transitions throw
 RECEIVED ────────┼──► PROCESSING ──► PROCESSED
    ▲             │        │
    │             │        └──► RETRY_PENDING ──► PROCESSING ──► FAILED
-   │             │                 ▲
-   │             │                 └── transient settlement failure
-   │             │
+   │             │                 ▲                              │
+   │             │                 └── transient settlement       │ operator requeue
+   │             │                     failure / stale claim      │ (MANUAL_REQUEUE)
+   │             │                                                ▼
+   │             └──────────────────────────────────────── RETRY_PENDING
+   │
 PENDING_PREDECESSOR ──(predecessor terminal)──┘
 ```
 
@@ -210,7 +216,7 @@ Three mechanisms compose:
 | Failure point | State after crash | Recovery |
 |---|---|---|
 | before claim | `RECEIVED` / `RETRY_PENDING` | next cycle claims it |
-| after claim, before gateway | `PROCESSING` (stuck) | startup recovery resets stale `PROCESSING` rows to `RETRY_PENDING`; see §13 |
+| after claim, before gateway | `PROCESSING` (stuck) | scheduled/startup stale-claim sweep resets claims older than the visibility timeout to `RETRY_PENDING`; see §6.5 |
 | after gateway, before commit | `RETRY_PENDING` (claim rolled back) | retry calls the gateway again; duplicate effect suppressed |
 | after commit, before audit write | same transaction | audit is written in the same transaction, so it commits or rolls back together |
 | after commit, before cursor advance | record `PROCESSED`, cursor behind | next cycle sees a terminal record at the expected sequence and advances |
@@ -356,9 +362,11 @@ With `max-attempts: 3`:
 | 2 | transient → `RETRY_PENDING`, next attempt after `400ms` |
 | 3 | transient → `FAILED`, `RETRY_EXHAUSTED` audit, cursor advances |
 
-`FAILED` is terminal and visible in the summary. It is *not* automatically resurrected:
-reviving it is an operator action (change the record and re-submit, or a future requeue
-endpoint), which keeps the "did we lose money?" question answerable.
+`FAILED` is terminal for the automatic pipeline and visible in the summary. It is *not*
+automatically resurrected: reviving it is an explicit operator action (see §6.5), which keeps
+the "did we lose money?" question answerable. The requeue is audited and resets the retry
+budget; the record keeps its original sequence slot and is processed out of stream order,
+which is the documented cost of not deadlocking the stream on a permanent failure.
 
 ### 6.4 Failure isolation
 
@@ -366,6 +374,30 @@ endpoint), which keeps the "did we lose money?" question answerable.
 * A failed record never blocks its stream: `FAILED` consumes the sequence.
 * An unexpected exception in one record does not abort the cycle: the worker catches it,
   marks the record and continues with the next id.
+
+### 6.5 Recoverability (NFR 6.3)
+
+Traceability alone is not recovery. Two mechanisms close the loop, both reusing the existing
+idempotent claim and gateway:
+
+**Operator requeue.** `POST /api/v1/transactions/{id}/requeue` moves a `FAILED` record back to
+`RETRY_PENDING` with `attemptCount = 0`, clears the failure fields, and writes a
+`MANUAL_REQUEUE` audit transition. Only `FAILED` is accepted; anything else returns
+`409 NOT_REQUEUEABLE`, and an unknown id returns `404`. The audit trail therefore distinguishes
+"failed by itself" from "an operator decided to try again".
+
+**Abandoned claims.** A worker that dies between `claim` and commit leaves a record in
+`PROCESSING`. A sweep (`TransactionRecoveryService.recoverStaleClaims`) finds `PROCESSING`
+rows whose `updated_at` is older than `transactionguard.recovery.stale-claim-timeout`
+(default `5m`) and returns them to `RETRY_PENDING` (`STALE_CLAIM_RECOVERED`). If the record
+has already consumed its retry budget it becomes `FAILED` with `STALE_CLAIM_EXHAUSTED`,
+because a record that repeatedly kills its worker must not be retried forever.
+
+The sweep runs at startup, on a fixed-delay schedule, and on demand through
+`POST /api/v1/processing/recover-stale`. Each candidate is recovered in its own transaction,
+so one poison row cannot abort the sweep. Retrying is safe even if the original attempt had
+already reached the settlement gateway, because the effect key makes the downstream call
+idempotent.
 
 ---
 
@@ -436,6 +468,8 @@ For a multi-account transaction this would need a canonical ordering of account 
 | `...{outcome=processed}` | counter | effects applied |
 | `...{outcome=retry_scheduled}` | counter | retries scheduled |
 | `...{outcome=claim_skipped}` | counter | claim lost to another worker |
+| `...{outcome=requeued}` | counter | operator requeues of `FAILED` records |
+| `...{outcome=stale_claim_recovered}` | counter | abandoned claims returned to the worker |
 | `transactionguard.transactions.current{status=...}` | gauge | current records per status |
 
 Useful alerting signals: `failed` and `rejected` rate, `duplicate` rate (upstream resend
@@ -445,10 +479,14 @@ storm), `current{status=RETRY_PENDING}` (downstream degradation),
 ### 8.3 Operational endpoints
 
 * `GET /processing/summary` — one call for the on-call dashboard: counts, duplicate/retry
-  pressure, ledger size, net booked amount, balances, gaps.
+  pressure, ledger size, net booked amount, balances, gaps. `countsByStatus.DUPLICATE` is
+  always `0` because `DUPLICATE` is an API outcome, never a stored record state; use
+  `duplicateAttempts` or the audit trail instead.
 * `GET /processing/sequence-gaps` — the blocking diagnosis.
 * `POST /processing/cycles` — manual drain; also proves the worker is a background
   component, not a request-scoped side effect.
+* `POST /processing/recover-stale` — run the stale-claim sweep immediately.
+* `POST /transactions/{id}/requeue` — operator recovery of a `FAILED` record.
 
 ### 8.4 Audit trail
 
@@ -467,6 +505,8 @@ they do not change the record state — that is where the value is.
 | `200` for duplicate | a replay is a successful no-op, not an error; the body carries the original state |
 | `400` / `409` / `422` | `400` = structurally unusable and not persisted; `409` = valid payload but the stream position is taken; `422` = understood but refused by a rule (stored as `REJECTED` when its identity is complete) |
 | `207` for batch | partial success is the normal case; the body has per-record outcomes and counts |
+| `202` for requeue | the record is only scheduled for retry; `200` would imply the retry already happened |
+| `409` for requeue refusal | the record exists but is not in a recoverable state (`NOT_REQUEUEABLE`) |
 | `recorded` flag | lets the caller distinguish "stored and will be processed" from "refused" |
 | Audit in the detail response | the caller does not need a second endpoint to explain a state |
 | `X-Request-Id` | end-to-end tracing without a full tracing stack |
@@ -543,8 +583,9 @@ account_balance
 | retry exhaustion | `retryBudgetExhaustionMarksFailed` |
 | backoff respected | `RetryBackoffIntegrationTest` |
 | failed record does not block stream | `failedRecordDoesNotBlockStream` |
+| failed record is recoverable | `RecoveryIntegrationTest` (requeue, stale claim, budget exhaustion) |
 | no manual trigger needed | `ScheduledWorkerIntegrationTest` (Awaitility, scheduler only) |
-| API contract | `TransactionApiIntegrationTest` (17 cases) |
+| API contract | `TransactionApiIntegrationTest` (21 cases) |
 | validation rules | `TransactionRequestValidatorTest` (12 cases) |
 | reversal rules | `ReversalIntegrationTest` (5 cases) |
 
@@ -562,25 +603,21 @@ Ordered by value:
    `(status, next_attempt_at)` for the claim query and partial indexes on `stream_id`.
 2. **Distributed scheduling.** ShedLock (or a leader-election lease) so only one instance
    runs a cycle, and stream partitioning for horizontal throughput.
-3. **Stuck-claim recovery.** A `PROCESSING` record whose `updated_at` is older than a
-   visibility timeout must be reset to `RETRY_PENDING` on startup or by a janitor job.
-   Safe because the gateway is idempotent. (Single-instance restarts are already covered
-   by the fact that claims live in the DB; the janitor matters when an instance dies
-   mid-cycle.)
-4. **Outbox / inbox.** If other systems must react to `PROCESSED`, write an outbox row in
+3. **Outbox / inbox.** If other systems must react to `PROCESSED`, write an outbox row in
    the same transaction instead of publishing from the processor.
-5. **Real settlement client.** Timeouts, connection pooling, circuit breaker, bulkhead,
+4. **Real settlement client.** Timeouts, connection pooling, circuit breaker, bulkhead,
    and an idempotency key header to the downstream.
-6. **Retry jitter** plus per-stream retry budgets to avoid synchronised retry storms.
-7. **Security.** Authentication/authorisation on the ingestion API, request signing,
+5. **Retry jitter** plus per-stream retry budgets to avoid synchronised retry storms.
+6. **Security.** Authentication/authorisation on the ingestion API, request signing,
    rate limiting per upstream, TLS, secrets management, audit log shipping.
-8. **Data lifecycle.** Partition `transaction_transition` by month, retention policy,
+7. **Data lifecycle.** Partition `transaction_transition` by month, retention policy,
    archive terminal records, PII review of the stored payload.
-9. **Observability.** OpenTelemetry traces across ingestion → gateway, Prometheus scraping,
+8. **Observability.** OpenTelemetry traces across ingestion → gateway, Prometheus scraping,
    alerts on the signals in §8.2, a dashboard for gaps and retry pressure.
-10. **Load testing** at the expected feed rate, with a documented throughput number per
-    stream and per account.
-11. **Requeue tooling** for `FAILED` records, with an explicit operator action and audit.
+9. **Load testing** at the expected feed rate, with a documented throughput number per
+   stream and per account.
+10. **Recovery runbooks.** The requeue and stale-claim endpoints exist; production still
+    needs authorisation, an operator UI or CLI, and alerting on `STALE_CLAIM_EXHAUSTED`.
 
 ---
 
