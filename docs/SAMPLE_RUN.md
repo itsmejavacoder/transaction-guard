@@ -19,7 +19,7 @@ Timestamps are UTC in JSON and local time (+05:30) in the console log.
 ### 1.1 Command
 
 ```cmd
-cd D:\mydev\assesment
+cd transaction-guard
 run-demo.cmd
 ```
 
