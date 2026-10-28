@@ -1,0 +1,65 @@
+{
+  "feedId": "FDE-SAMPLE-2026-10-27",
+  "transactions": [
+    {
+      "requestId": "REQ-2",
+      "transactionId": "TXN-2002",
+      "accountId": "ACC-201",
+      "transactionType": "DEBIT",
+      "amount": 40.00,
+      "currency": "INR",
+      "sequenceNumber": 2,
+      "eventTime": "2026-10-27T10:00:02Z"
+    },
+    {
+      "requestId": "REQ-1",
+      "transactionId": "TXN-2001",
+      "accountId": "ACC-201",
+      "transactionType": "CREDIT",
+      "amount": 100.00,
+      "currency": "INR",
+      "sequenceNumber": 1,
+      "eventTime": "2026-10-27T10:00:01Z"
+    },
+    {
+      "requestId": "REQ-2-DUP",
+      "transactionId": "TXN-2002",
+      "accountId": "ACC-201",
+      "transactionType": "DEBIT",
+      "amount": 40.00,
+      "currency": "INR",
+      "sequenceNumber": 2,
+      "eventTime": "2026-10-27T10:00:02Z"
+    },
+    {
+      "requestId": "REQ-3",
+      "transactionId": "TXN-2003",
+      "accountId": "ACC-201",
+      "transactionType": "CREDIT",
+      "amount": 25.00,
+      "currency": "INR",
+      "sequenceNumber": 3,
+      "eventTime": "2026-10-27T10:00:03Z"
+    },
+    {
+      "requestId": "REQ-4",
+      "transactionId": "TXN-2004",
+      "accountId": "ACC-202",
+      "transactionType": "DEBIT",
+      "amount": -10.00,
+      "currency": "INR",
+      "sequenceNumber": 4,
+      "eventTime": "2026-10-27T10:00:04Z"
+    },
+    {
+      "requestId": "REQ-5",
+      "transactionId": "TXN-2005",
+      "accountId": "ACC-203",
+      "transactionType": "CREDIT",
+      "amount": 500.00,
+      "currency": "INR",
+      "sequenceNumber": 5,
+      "eventTime": "2026-10-27T10:00:05Z"
+    }
+  ]
+}

@@ -1,0 +1,21 @@
+# One-command demo: loads the assessment sample feed on startup, simulates one
+# transient settlement failure for TXN-2005, and retries immediately so the
+# whole scenario completes within a couple of seconds.
+spring:
+  datasource:
+    url: jdbc:h2:file:./data/transactionguard-demo;DB_CLOSE_ON_EXIT=FALSE
+  jpa:
+    hibernate:
+      ddl-auto: update
+
+transactionguard:
+  worker:
+    enabled: true
+    interval-ms: 100
+  retry:
+    initial-backoff: 0ms
+  ingestion:
+    startup-file: classpath:samples/sample-transactions.json
+  simulation:
+    transient-failures:
+      TXN-2005: 1

@@ -1,0 +1,10 @@
+{
+  "requestId": "REQ-1002-AGAIN",
+  "transactionId": "TXN-1002",
+  "accountId": "ACC-900",
+  "transactionType": "DEBIT",
+  "amount": 40.00,
+  "currency": "INR",
+  "sequenceNumber": 2,
+  "eventTime": "2026-10-27T11:00:02Z"
+}

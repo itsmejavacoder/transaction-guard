@@ -1,0 +1,15 @@
+# Normalise line endings in the repository so the project is byte-stable
+# across Windows, macOS and Linux checkouts.
+* text=auto eol=lf
+
+# Windows entry points must stay CRLF for cmd.exe.
+*.cmd text eol=crlf
+*.bat text eol=crlf
+
+# The POSIX wrapper must stay LF.
+mvnw text eol=lf
+
+# Binary artefacts, should they ever be added by mistake.
+*.jar binary
+*.mv.db binary
+*.png binary

@@ -1,0 +1,61 @@
+spring:
+  application:
+    name: transactionguard
+  datasource:
+    url: jdbc:h2:file:./data/transactionguard;DB_CLOSE_ON_EXIT=FALSE
+    username: sa
+    password: ""
+    driver-class-name: org.h2.Driver
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: update
+    properties:
+      hibernate:
+        jdbc:
+          time_zone: UTC
+  h2:
+    console:
+      enabled: false
+  jackson:
+    serialization:
+      write-dates-as-timestamps: false
+    default-property-inclusion: non_null
+    time-zone: UTC
+
+server:
+  port: 8080
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  endpoint:
+    health:
+      show-details: always
+
+logging:
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} %-5level [%thread] [req=%X{requestId:-}] %logger{40} - %msg%n"
+  level:
+    com.transactionguard: INFO
+
+transactionguard:
+  worker:
+    enabled: true
+    interval-ms: 250
+    max-records-per-cycle: 500
+    fetch-size: 25
+  retry:
+    max-attempts: 3
+    initial-backoff: 200ms
+    multiplier: 2.0
+    max-backoff: 2s
+  ordering:
+    enabled: true
+    scope: GLOBAL
+  ingestion:
+    startup-file: ""
+  simulation:
+    transient-failures: {}

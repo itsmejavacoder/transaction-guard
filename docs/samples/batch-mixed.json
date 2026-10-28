@@ -1,0 +1,34 @@
+{
+  "transactions": [
+    {
+      "requestId": "REQ-1007",
+      "transactionId": "TXN-1007",
+      "accountId": "ACC-900",
+      "transactionType": "CREDIT",
+      "amount": 5.00,
+      "currency": "INR",
+      "sequenceNumber": 7,
+      "eventTime": "2026-10-27T11:00:07Z"
+    },
+    {
+      "requestId": "REQ-1002-AGAIN",
+      "transactionId": "TXN-1002",
+      "accountId": "ACC-900",
+      "transactionType": "DEBIT",
+      "amount": 40.00,
+      "currency": "INR",
+      "sequenceNumber": 2,
+      "eventTime": "2026-10-27T11:00:02Z"
+    },
+    {
+      "requestId": "REQ-1008",
+      "transactionId": "TXN-1008",
+      "accountId": "ACC-901",
+      "transactionType": "CREDIT",
+      "amount": 0.00,
+      "currency": "INR",
+      "sequenceNumber": 8,
+      "eventTime": "2026-10-27T11:00:08Z"
+    }
+  ]
+}

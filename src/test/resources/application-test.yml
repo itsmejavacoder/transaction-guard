@@ -1,0 +1,34 @@
+spring:
+  datasource:
+    url: jdbc:h2:mem:transactionguard-test-${random.uuid};DB_CLOSE_DELAY=-1
+    username: sa
+    password: ""
+    driver-class-name: org.h2.Driver
+  jpa:
+    hibernate:
+      ddl-auto: create-drop
+    open-in-view: false
+
+transactionguard:
+  worker:
+    enabled: false
+    interval-ms: 100000
+    max-records-per-cycle: 100
+    fetch-size: 10
+  retry:
+    max-attempts: 3
+    initial-backoff: 0ms
+    multiplier: 2.0
+    max-backoff: 0ms
+  ordering:
+    enabled: true
+    scope: GLOBAL
+  ingestion:
+    startup-file: ""
+  simulation:
+    transient-failures: {}
+
+logging:
+  level:
+    com.transactionguard: INFO
+    org.hibernate.SQL: WARN

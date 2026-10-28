@@ -1,0 +1,9 @@
+{
+  "transactionId": "TXN-1010",
+  "accountId": "ACC-902",
+  "transactionType": "CREDIT",
+  "amount": 10.00,
+  "currency": "INR",
+  "sequenceNumber": 7,
+  "eventTime": "2026-10-27T11:00:07Z"
+}
