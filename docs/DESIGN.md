@@ -495,6 +495,15 @@ free-text detail, timestamp. It answers "who moved this and why" for every recor
 returned in `GET /transactions/{id}`. Duplicate attempts are recorded there even though
 they do not change the record state — that is where the value is.
 
+### 8.5 API contract
+
+* `GET /v3/api-docs` — generated OpenAPI 3 document; every controller operation has a
+  summary and description.
+* `/swagger-ui.html` — browsable Swagger UI for manual exploration.
+* `postman/transaction-guard.postman_collection.json` — executable end-to-end scenario
+  covering ingestion, processing, batch and error paths.
+* `OpenApiIntegrationTest` — fails if the document is missing or a public path is renamed.
+
 ---
 
 ## 9. API design decisions
@@ -585,13 +594,14 @@ account_balance
 | failed record does not block stream | `failedRecordDoesNotBlockStream` |
 | failed record is recoverable | `RecoveryIntegrationTest` (requeue, stale claim, budget exhaustion) |
 | no manual trigger needed | `ScheduledWorkerIntegrationTest` (Awaitility, scheduler only) |
-| API contract | `TransactionApiIntegrationTest` (21 cases) |
+| API contract | `TransactionApiIntegrationTest` (21 cases), `OpenApiIntegrationTest` (2 cases) |
 | validation rules | `TransactionRequestValidatorTest` (12 cases) |
 | reversal rules | `ReversalIntegrationTest` (5 cases) |
 
-Tests run against real Spring contexts, a real (in-memory) database and the real
-scheduler. Nothing about the concurrency or ordering behaviour is mocked — only the
-external settlement system, which is exactly the boundary the design isolates.
+The suite is 97 tests across 18 classes. Tests run against real Spring contexts, a real
+(in-memory) database and the real scheduler. Nothing about the concurrency or ordering
+behaviour is mocked — only the external settlement system, which is exactly the boundary
+the design isolates.
 
 ---
 
@@ -621,7 +631,117 @@ Ordered by value:
 
 ---
 
-## 14. AI usage
+## 14. End-to-end flows
 
-See [`AI_USAGE.md`](AI_USAGE.md) for the tools, the working method, what the AI produced,
-and what was verified by execution rather than accepted on trust.
+Sections 2–8 explain each mechanism in isolation. This section follows a request across
+the boundaries so the interaction between those mechanisms is explicit. Paths are
+relative to `/api/v1`.
+
+### 14.1 Accepted record: HTTP to ledger
+
+1. `RequestTracingFilter` assigns or propagates `X-Request-Id`, puts it in the MDC and
+   returns it in the response header.
+2. `TransactionController` delegates to `TransactionFeedService.ingestOne`. The service
+   takes the per-stream lock and opens **one transaction per record**, so a bad record in
+   a batch cannot roll back its neighbours.
+3. `TransactionIngester` runs duplicate detection (`request_id`, then `transaction_id`)
+   before validation, then collects structural issues with `TransactionRequestValidator`.
+   An untrackable payload stops here (`400`, nothing persisted).
+4. `SequenceGate.admit` consults the stream cursor:
+   * `sequence == next expected` → `RECEIVED`;
+   * `sequence > next expected` → `PENDING_PREDECESSOR`;
+   * an already used slot → `SEQUENCE_CONFLICT`/`STALE_SEQUENCE` (`409`).
+5. The record, the initial `TransactionTransition` and the cursor decision commit
+   together. The response (`202`) carries status, `duplicate`, `recorded`, validation
+   issues, sequence and stream.
+6. The scheduler (`TransactionProcessingWorker`, every 250 ms by default) calls
+   `findClaimableIds` for `RECEIVED`/`RETRY_PENDING` rows whose `next_attempt_at` has
+   elapsed, then runs the atomic claim (`UPDATE ... WHERE status IN (...)`). Only one
+   worker wins; the claim increments `attempt_count` and sets `PROCESSING`.
+7. `TransactionProcessor.process` runs one business transaction:
+   defensive `effect_applied` check → signed amount (credit/debit/reversal rules) →
+   pessimistic lock on the account balance → currency and funds checks → idempotent
+   settlement gateway call keyed by `transaction_id` → unique ledger insert → balance
+   update → record `PROCESSED`.
+8. In the same transaction, `SequenceGate.advanceAndRelease` moves the cursor across
+   consecutive terminal rows and promotes the first waiting `PENDING_PREDECESSOR` record
+   to `RECEIVED`.
+9. Reads then assemble the stored evidence: `GET /transactions/{id}` returns the record,
+   its ledger entry and the ordered history; `/processing/summary` aggregates counts,
+   ledger size, net booked amount, balances and gaps.
+
+Every step appends a `TransactionTransition`, so the detail response explains the record
+without consulting logs.
+
+### 14.2 Duplicate delivery
+
+A replay is recognised at the widest key first: a known `request_id` is a duplicate of
+that submission, then a known `transaction_id` is a replay of the same business
+transaction (even with a new delivery id). Detection runs before validation so a replay
+of a previously rejected record is reported as a duplicate, not re-judged.
+
+The original row is **not** claimed again and no second effect is scheduled. The response
+is `200` with `duplicate=true`, the original state in `message`, and a
+`DUPLICATE_REQUEST`/`DUPLICATE_TRANSACTION` audit row. A payload that reuses one identity
+but changes another (ambiguous request/transaction pairing, different payload for the same
+transaction, different record on a used sequence) is a conflict, not a duplicate.
+
+### 14.3 Out-of-order delivery
+
+Sequence 3 may arrive before 2. The record is persisted as `PENDING_PREDECESSOR`, which
+is visible and auditable but not claimable. When the missing predecessor reaches a
+terminal state, `advanceAndRelease` moves the cursor and flips the waiting record to
+`RECEIVED`, and the next cycle claims it. The `(stream_id, sequence_number)` unique
+constraint keeps two different records from occupying the same slot.
+
+If the predecessor never arrives, the record stays parked and
+`GET /processing/sequence-gaps` reports the stream, its cursor and the missing sequence.
+Every terminal state — `PROCESSED`, `REJECTED`, `FAILED` — consumes its slot, so one bad
+row cannot block the feed forever.
+
+### 14.4 Transient failure and retry
+
+The settlement gateway can time out. A `TransientSettlementException` aborts the claim
+transaction, so no ledger row or balance change survives. `ProcessingFailureHandler`
+moves the record to `RETRY_PENDING` with `next_attempt_at` from `RetryPolicy`
+(exponential, capped, deterministic) and writes `RETRY_SCHEDULED`. The claim query honours
+that due time, so a retry is not attempted early.
+
+Retrying is safe because the gateway suppresses a second effect for the same effect key
+and the ledger has a unique `transaction_id`. After `max-attempts`, the record becomes
+`FAILED` with `RETRY_EXHAUSTED`; the cursor advances and the rest of the stream continues.
+
+### 14.5 Terminal failure, operator requeue and stale claims
+
+`FAILED` is terminal for the automatic pipeline. An operator fixes the cause and calls
+`POST /transactions/{id}/requeue`: the record returns to `RETRY_PENDING` with a fresh retry
+budget, `attempt_count = 0`, cleared failure fields and a `MANUAL_REQUEUE` audit row.
+Anything other than `FAILED` returns `409 NOT_REQUEUEABLE`; an unknown id returns `404`.
+
+A worker that dies between claim and commit leaves a record in `PROCESSING`. The startup
+sweep, the scheduled sweep and `POST /processing/recover-stale` find claims older than
+`transactionguard.recovery.stale-claim-timeout` (default `5m`). A claim with budget left
+returns to `RETRY_PENDING` (`STALE_CLAIM_RECOVERED`); an exhausted one becomes `FAILED`
+with `STALE_CLAIM_EXHAUSTED`. Both paths are audited, and the sweep runs per record so
+one poison record cannot abort the others.
+
+### 14.6 Batch and file ingestion
+
+`POST /transactions/batch` and the startup/demo JSON sources feed the same per-record
+pipeline. Each element gets its own transaction, duplicate check, validation and sequence
+decision, and the batch response (`207`) reports `total`, `countsByStatus` and a result per
+record. A malformed or invalid element is isolated; valid elements are still admitted.
+This is the path used by the assessment sample: six deliveries for five business
+transactions produce one duplicate, one rejection, one retry and four ledger entries.
+
+### 14.7 Where each guarantee is enforced
+
+| Guarantee | Mechanism |
+|---|---|
+| Exactly one effect per business transaction | atomic claim, idempotent gateway effect key, unique `ledger_entry.transaction_id` |
+| Order within a stream | cursor + `(stream_id, sequence_number)` unique constraint + `PENDING_PREDECESSOR` buffering |
+| No silent stuck stream | terminal states consume their slot, gap report, audit history |
+| Crash safety | one DB transaction per effect; retry after rollback; stale-claim sweep |
+| Recoverability | bounded retries, operator requeue, abandoned-claim recovery |
+| Auditability | append-only transitions, request-id logs, masked account ids |
+| Published contract | `/v3/api-docs`, Swagger UI, Postman collection, `OpenApiIntegrationTest` |

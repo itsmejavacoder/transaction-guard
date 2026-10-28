@@ -21,7 +21,7 @@ fails if the behaviour regresses.
 | L2-FR-09 | Retry transient failures without duplicate effects | `RetryPolicy` (bounded, exponential, due-time rounded down); effect key idempotency; record-level claim; ledger uniqueness | `RetryIntegrationTest` (5), `RetryBackoffIntegrationTest` (1), `IdempotencyIntegrationTest` |
 | L2-FR-10 | Separate business logic from input handling | Packages `api`, `ingestion`, `validation`, `processing`, `persistence`, `observability`; the processor has no HTTP or JSON knowledge | code structure + package-private seams |
 | L2-FR-11 | Produce a processing summary with counts by status | `GET /api/v1/processing/summary` (`ProcessingSummaryService`) with counts, duplicate/retry pressure, ledger size, net booked amount, balances, gaps; `DUPLICATE` is documented as an API outcome and always `0` in stored counts | `TransactionApiIntegrationTest.summaryReportsCountsAndGaps`, demo output |
-| L2-FR-12 | Tests for duplicate, out-of-order, invalid and retry scenarios | 95 tests across 17 classes | `mvn test` (see `SAMPLE_RUN.md` §3) |
+| L2-FR-12 | Tests for duplicate, out-of-order, invalid and retry scenarios | 97 tests across 18 classes | `mvn test` (see `SAMPLE_RUN.md` §3) |
 
 ---
 
@@ -84,7 +84,7 @@ domain is a feed of financial postings where "last write wins" is unsafe.
 | Invalid records are isolated | `SampleScenarioIntegrationTest` (`TXN-2004` rejected, others processed), `IngestionIntegrationTest` batch isolation |
 | Clear status lifecycle | `TransactionStatus` / `TransactionLifecycle`, exposed in `GET /transactions/{id}` history |
 | Production implications explained | `DESIGN.md` §7 (concurrency), §8 (observability), §12 (trade-offs), §13 (hardening) |
-| AI usage explained and validated | `AI_USAGE.md`, including the defects AI introduced and how they were caught |
+| API contract published and verified | OpenAPI at `/v3/api-docs` + Swagger UI, `OpenApiIntegrationTest`, Postman collection executed with Newman |
 | Trade-offs and next steps identified | `DESIGN.md` §11–13 |
 
 ---
@@ -118,7 +118,7 @@ net booked `585.00`, `ACC-201` = `85.00`, `ACC-203` = `500.00`, no gaps.
 | Sample output | `README.md` §5, `docs/SAMPLE_RUN.md` |
 | Unit tests / evidence | `src/test/java`, `SAMPLE_RUN.md` §3 |
 | Design note | `docs/DESIGN.md` |
-| AI usage | `docs/AI_USAGE.md` |
+| API contract | `/v3/api-docs`, Swagger UI, `postman/transaction-guard.postman_collection.json` |
 
 ---
 

@@ -1,0 +1,700 @@
+{
+  "info": {
+    "_postman_id": "7b1f4c2e-9a3d-4e8b-a6c1-5d2f8b0e4a17",
+    "name": "TransactionGuard",
+    "description": "End-to-end requests for the TransactionGuard idempotent transaction processing service.\n\nStart the service, then run the folders in order:\n\n  mvnw.cmd spring-boot:run\n\nThe scenario uses global sequence numbers 1-6 and is designed for a fresh database. Delete ./data before a full run so every request is applied. Each request asserts the status code and the response shape documented in README.md and docs/DESIGN.md.\n\nCollection variables: baseUrl.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:8080"
+    }
+  ],
+  "item": [
+    {
+      "name": "1. Ingestion",
+      "item": [
+        {
+          "name": "Submit single transaction",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('accepted with 202', () => pm.response.to.have.status(202));",
+                  "const body = pm.response.json();",
+                  "pm.test('record is ready for its stream', () => {",
+                  "    pm.expect(body.status).to.eql('RECEIVED');",
+                  "    pm.expect(body.duplicate).to.be.false;",
+                  "    pm.expect(body.recorded).to.be.true;",
+                  "    pm.expect(body.streamId).to.eql('GLOBAL');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"requestId\": \"REQ-9001\",\n  \"transactionId\": \"TXN-9001\",\n  \"accountId\": \"ACC-901\",\n  \"transactionType\": \"CREDIT\",\n  \"amount\": 100.00,\n  \"currency\": \"INR\",\n  \"sequenceNumber\": 1,\n  \"eventTime\": \"2026-10-27T10:00:00Z\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/transactions",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "transactions"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Submit out-of-order record",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('accepted with 202', () => pm.response.to.have.status(202));",
+                  "const body = pm.response.json();",
+                  "pm.test('waits for its predecessor', () => {",
+                  "    pm.expect(body.status).to.eql('PENDING_PREDECESSOR');",
+                  "    pm.expect(body.sequenceNumber).to.eql(3);",
+                  "    pm.expect(body.recorded).to.be.true;",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"requestId\": \"REQ-9003\",\n  \"transactionId\": \"TXN-9003\",\n  \"accountId\": \"ACC-901\",\n  \"transactionType\": \"CREDIT\",\n  \"amount\": 30.00,\n  \"currency\": \"INR\",\n  \"sequenceNumber\": 3,\n  \"eventTime\": \"2026-10-27T10:03:00Z\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/transactions",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "transactions"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Submit missing predecessor",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('accepted with 202', () => pm.response.to.have.status(202));",
+                  "const body = pm.response.json();",
+                  "pm.test('stored on its own stream slot', () => {",
+                  "    pm.expect(['RECEIVED', 'PENDING_PREDECESSOR']).to.include(body.status);",
+                  "    pm.expect(body.sequenceNumber).to.eql(2);",
+                  "    pm.expect(body.recorded).to.be.true;",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"requestId\": \"REQ-9002\",\n  \"transactionId\": \"TXN-9002\",\n  \"accountId\": \"ACC-901\",\n  \"transactionType\": \"DEBIT\",\n  \"amount\": 20.00,\n  \"currency\": \"INR\",\n  \"sequenceNumber\": 2,\n  \"eventTime\": \"2026-10-27T10:02:00Z\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/transactions",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "transactions"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Replay accepted transaction",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('duplicate returns 200', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('no second effect is scheduled', () => {",
+                  "    pm.expect(body.duplicate).to.be.true;",
+                  "    pm.expect(body.status).to.eql('DUPLICATE');",
+                  "    pm.expect(body.message).to.include('Duplicate ignored');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"requestId\": \"REQ-9001-REPLAY\",\n  \"transactionId\": \"TXN-9001\",\n  \"accountId\": \"ACC-901\",\n  \"transactionType\": \"CREDIT\",\n  \"amount\": 100.00,\n  \"currency\": \"INR\",\n  \"sequenceNumber\": 1,\n  \"eventTime\": \"2026-10-27T10:00:00Z\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/transactions",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "transactions"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "2. Process and inspect",
+      "item": [
+        {
+          "name": "Run one worker cycle",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('cycle completed', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('every waiting record is processed', () => {",
+                  "    pm.expect(body.alreadyRunning).to.be.false;",
+                  "    pm.expect(body.claimedCount).to.be.at.least(3);",
+                  "    pm.expect(body.processedCount).to.be.at.least(3);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/processing/cycles",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "processing",
+                "cycles"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get processed transaction",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('transaction found', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('effect applied exactly once', () => {",
+                  "    pm.expect(body.status).to.eql('PROCESSED');",
+                  "    pm.expect(body.effectApplied).to.be.true;",
+                  "    pm.expect(body.ledgerEntry.balanceAfter).to.eql(100.00);",
+                  "    pm.expect(body.history).to.be.an('array').that.is.not.empty;",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/transactions/TXN-9001",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "transactions",
+                "TXN-9001"
+              ]
+            }
+          }
+        },
+        {
+          "name": "List transactions",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('list returned', () => pm.response.to.have.status(200));",
+                  "pm.test('three records are visible', () => {",
+                  "    pm.expect(pm.response.json()).to.be.an('array').with.lengthOf(3);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/transactions?limit=10",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "transactions"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "10"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get processing summary",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('summary returned', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('ledger matches the processed stream', () => {",
+                  "    pm.expect(body.totalTransactions).to.eql(3);",
+                  "    pm.expect(body.countsByStatus.PROCESSED).to.eql(3);",
+                  "    pm.expect(body.ledgerEntries).to.eql(3);",
+                  "    pm.expect(body.duplicateAttempts).to.eql(1);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/processing/summary",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "processing",
+                "summary"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get sequence gaps",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('report returned', () => pm.response.to.have.status(200));",
+                  "pm.test('no stream is blocked', () => {",
+                  "    pm.expect(pm.response.json()).to.be.an('array').that.is.empty;",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/processing/sequence-gaps",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "processing",
+                "sequence-gaps"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Recover stale claims",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('sweep completed', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('nothing was abandoned', () => {",
+                  "    pm.expect(body.recovered).to.eql(0);",
+                  "    pm.expect(body.failed).to.eql(0);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/processing/recover-stale",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "processing",
+                "recover-stale"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "3. Batch",
+      "item": [
+        {
+          "name": "Submit mixed batch",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('partial success returns 207', () => pm.response.to.have.status(207));",
+                  "const body = pm.response.json();",
+                  "pm.test('bad record is isolated', () => {",
+                  "    pm.expect(body.total).to.eql(3);",
+                  "    pm.expect(body.results).to.be.an('array').with.lengthOf(3);",
+                  "    pm.expect(body.countsByStatus.RECEIVED).to.eql(1);",
+                  "    pm.expect(body.countsByStatus.PENDING_PREDECESSOR).to.eql(1);",
+                  "    pm.expect(body.countsByStatus.REJECTED).to.eql(1);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"transactions\": [\n    {\n      \"requestId\": \"REQ-9004\",\n      \"transactionId\": \"TXN-9004\",\n      \"accountId\": \"ACC-902\",\n      \"transactionType\": \"CREDIT\",\n      \"amount\": 40.00,\n      \"currency\": \"INR\",\n      \"sequenceNumber\": 4,\n      \"eventTime\": \"2026-10-27T10:04:00Z\"\n    },\n    {\n      \"requestId\": \"REQ-9005\",\n      \"transactionId\": \"TXN-9005\",\n      \"accountId\": \"ACC-902\",\n      \"transactionType\": \"DEBIT\",\n      \"amount\": 15.00,\n      \"currency\": \"INR\",\n      \"sequenceNumber\": 5,\n      \"eventTime\": \"2026-10-27T10:05:00Z\"\n    },\n    {\n      \"requestId\": \"REQ-9006\",\n      \"transactionId\": \"TXN-9006\",\n      \"accountId\": \"ACC-902\",\n      \"transactionType\": \"CREDIT\",\n      \"amount\": -5.00,\n      \"currency\": \"INR\",\n      \"sequenceNumber\": 6,\n      \"eventTime\": \"2026-10-27T10:06:00Z\"\n    }\n  ]\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/transactions/batch",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "transactions",
+                "batch"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Process the batch",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('cycle completed', () => pm.response.to.have.status(200));",
+                  "pm.test('valid records are processed', () => {",
+                  "    pm.expect(pm.response.json().processedCount).to.be.at.least(2);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/processing/cycles",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "processing",
+                "cycles"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get rejected transaction",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('record stored for audit', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('rejected without an effect', () => {",
+                  "    pm.expect(body.status).to.eql('REJECTED');",
+                  "    pm.expect(body.effectApplied).to.be.false;",
+                  "    pm.expect(body.failureCode).to.eql('VALIDATION_FAILED');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/transactions/TXN-9006",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "transactions",
+                "TXN-9006"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "4. Errors",
+      "item": [
+        {
+          "name": "Missing requestId returns 400",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('structural error returns 400', () => pm.response.to.have.status(400));",
+                  "const body = pm.response.json();",
+                  "pm.test('validation issue is explicit', () => {",
+                  "    pm.expect(body.recorded).to.be.false;",
+                  "    pm.expect(body.validationIssues[0].code).to.eql('REQUEST_ID_REQUIRED');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"transactionId\": \"TXN-9010\",\n  \"accountId\": \"ACC-901\",\n  \"transactionType\": \"CREDIT\",\n  \"amount\": 10.00,\n  \"currency\": \"INR\",\n  \"sequenceNumber\": 10,\n  \"eventTime\": \"2026-10-27T10:10:00Z\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/transactions",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "transactions"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Sequence conflict returns 409",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('consumed slot returns 409', () => pm.response.to.have.status(409));",
+                  "const body = pm.response.json();",
+                  "pm.test('conflict explains the stream state', () => {",
+                  "    pm.expect(body.recorded).to.be.false;",
+                  "    pm.expect(body.validationIssues[0].code).to.eql('SEQUENCE_CONFLICT');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"requestId\": \"REQ-9011\",\n  \"transactionId\": \"TXN-9011\",\n  \"accountId\": \"ACC-901\",\n  \"transactionType\": \"CREDIT\",\n  \"amount\": 10.00,\n  \"currency\": \"INR\",\n  \"sequenceNumber\": 1,\n  \"eventTime\": \"2026-10-27T10:11:00Z\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/transactions",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "transactions"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Requeue non-failed returns 409",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('only failed records can be requeued', () => pm.response.to.have.status(409));",
+                  "pm.test('error body is consistent', () => {",
+                  "    pm.expect(pm.response.json().code).to.eql('NOT_REQUEUEABLE');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/transactions/TXN-9001/requeue",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "transactions",
+                "TXN-9001",
+                "requeue"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Unknown transaction returns 404",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('unknown id returns 404', () => pm.response.to.have.status(404));",
+                  "const body = pm.response.json();",
+                  "pm.test('error body is consistent', () => {",
+                  "    pm.expect(body.code).to.eql('NOT_FOUND');",
+                  "    pm.expect(body.path).to.eql('/api/v1/transactions/DOES-NOT-EXIST');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/transactions/DOES-NOT-EXIST",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "transactions",
+                "DOES-NOT-EXIST"
+              ]
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

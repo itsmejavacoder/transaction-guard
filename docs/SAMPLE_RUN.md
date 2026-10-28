@@ -523,11 +523,11 @@ and a one-row history. Example:
 ## 3. Test evidence
 
 ```
-[INFO] Tests run: 95, Failures: 0, Errors: 0, Skipped: 0
+[INFO] Tests run: 97, Failures: 0, Errors: 0, Skipped: 0
 [INFO] BUILD SUCCESS
 ```
 
-Per suite (from `target/surefire-reports`, run on 2026-10-28 after the recovery changes):
+Per suite (from `target/surefire-reports`, run on 2026-10-28 after the OpenAPI contract test was added):
 
 | # | Suite | Tests | Time | What it proves |
 |---|---|---|---|---|
@@ -548,7 +548,8 @@ Per suite (from `target/surefire-reports`, run on 2026-10-28 after the recovery 
 | 15 | `SampleScenarioIntegrationTest` | 3 | 0.287 s | the assessment sample end to end |
 | 16 | `ScheduledWorkerIntegrationTest` | 1 | 0.628 s | no manual trigger: the scheduler drains the feed |
 | 17 | `TransactionApiIntegrationTest` | 21 | 11.230 s | status codes incl. `409`/`404`, batch `207`, filters, history, recovery |
-| | **Total** | **95** | | |
+| 18 | `OpenApiIntegrationTest` | 2 | 12.910 s | OpenAPI document and Swagger UI expose every public path |
+| | **Total** | **97** | | |
 
 The pre-recovery suite was executed twice back to back with identical results to catch
 order-dependent flakiness; the current suite was then run again in full after the recovery
@@ -574,7 +575,7 @@ trust any application-level check: it asserts the financial outcome.
 git clone https://github.com/itsmejavacoder/transaction-guard.git
 cd transaction-guard
 
-:: 1. full test suite (95 tests)
+:: 1. full test suite (97 tests)
 run-tests.cmd
 
 :: 2. the assessment scenario (deletes data\, starts on port 8080)

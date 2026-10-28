@@ -8,6 +8,8 @@ import com.transactionguard.ingestion.TransactionFeedService;
 import com.transactionguard.processing.TransactionRecoveryService;
 import com.transactionguard.validation.RequestValidationException;
 import com.transactionguard.validation.ValidationIssue;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -35,6 +37,7 @@ import java.util.Set;
  */
 @RestController
 @RequestMapping("/api/v1/transactions")
+@Tag(name = "Transactions", description = "Ingestion, query and operator recovery")
 public class TransactionController {
 
     /** Refusals caused by stream state rather than by the payload itself. */
@@ -54,12 +57,14 @@ public class TransactionController {
         this.recoveryService = recoveryService;
     }
 
+    @Operation(summary = "Submit one transaction", description = "Validates, deduplicates and admits the record to its stream. Returns 202 when persisted, 200 for a duplicate, 400/409/422 for refusals.")
     @PostMapping
     public ResponseEntity<SubmissionOutcome> submit(@RequestBody(required = false) TransactionRequest request) {
         SubmissionOutcome outcome = feedService.ingestOne(request);
         return ResponseEntity.status(statusFor(outcome)).body(outcome);
     }
 
+    @Operation(summary = "Submit a batch", description = "Ingests each record in its own transaction and returns 207 with per-record outcomes.")
     @PostMapping("/batch")
     public ResponseEntity<BatchSubmissionResponse> submitBatch(
             @RequestBody(required = false) TransactionBatchRequest batch) {
@@ -77,6 +82,7 @@ public class TransactionController {
      * out of stream order, which is the deliberate cost of not deadlocking the stream
      * on a failure. The requeue itself is written to the audit trail.
      */
+    @Operation(summary = "Requeue a failed transaction", description = "Operator recovery: FAILED to RETRY_PENDING with a fresh retry budget. The record keeps its sequence slot and is processed out of stream order.")
     @PostMapping("/{transactionId}/requeue")
     public ResponseEntity<TransactionDetail> requeue(@PathVariable String transactionId) {
         recoveryService.requeue(transactionId);
@@ -84,11 +90,13 @@ public class TransactionController {
                 .body(queryService.findByTransactionId(transactionId));
     }
 
+    @Operation(summary = "Get one transaction", description = "Current state, ledger evidence and the full audit history.")
     @GetMapping("/{transactionId}")
     public TransactionDetail find(@PathVariable String transactionId) {
         return queryService.findByTransactionId(transactionId);
     }
 
+    @Operation(summary = "List transactions", description = "Filter by status and account, capped by limit.")
     @GetMapping
     public List<TransactionDetail> list(@RequestParam(required = false) TransactionStatus status,
                                         @RequestParam(required = false) String accountId,

@@ -61,6 +61,7 @@ Guarantees:
 | Database | H2 (file mode by default, in-memory for tests) |
 | Build | Maven (`pom.xml`, wrapper included) |
 | Metrics | Micrometer counters + gauges via `/actuator` |
+| API docs | springdoc OpenAPI 3 + Swagger UI, Postman collection |
 | Tests | JUnit 5, Spring Boot Test, MockMvc, AssertJ, Awaitility, Mockito |
 
 No Lombok, no MapStruct, no XML: the domain is plain Java so the behaviour is explicit.
@@ -78,15 +79,15 @@ transaction-guard/
 ├── LICENSE                            MIT
 ├── .github/workflows/ci.yml           CI: build + tests on push
 ├── docs/
-│   ├── DESIGN.md                     architecture, idempotency, ordering, retry, hardening
-│   ├── AI_USAGE.md                   how AI was used, what was verified
+│   ├── DESIGN.md                     architecture, flows, idempotency, ordering, retry, hardening
 │   ├── SAMPLE_RUN.md                 captured sample input/output
 │   ├── ASSESSMENT.md                 requirement → implementation → test mapping
 │   └── samples/                      request payloads used in the walkthrough
+├── postman/                          importable Postman collection
 └── src
     ├── main/java/com/transactionguard
     │   ├── api/                      REST controllers, read models, error handler, tracing filter
-    │   ├── config/                   typed properties, Clock bean
+    │   ├── config/                   typed properties, Clock bean, OpenAPI definition
     │   ├── domain/                   aggregates, status machine, audit entity, exceptions
     │   ├── ingestion/                validators entry point, feed service, JSON source, dedupe
     │   ├── observability/            Micrometer counters/gauges, PII masker
@@ -144,8 +145,9 @@ On Windows `cmd`, replace `\` with `^` and use double quotes around the JSON bod
 ### Sample walkthrough
 
 `docs/SAMPLE_RUN.md` contains the full walkthrough with real captured responses
-(accepted, duplicate, invalid, out-of-order, batch, cycle report). The service has no
-generated OpenAPI UI; the walkthrough and the tables below are the API contract.
+(accepted, duplicate, invalid, out-of-order, batch, cycle report). The running service
+also publishes a generated OpenAPI 3 document and Swagger UI; see
+[OpenAPI and Postman](#openapi-and-postman) below.
 
 ---
 
@@ -292,6 +294,33 @@ from "in progress":
 Every request is tagged with an `X-Request-Id` (generated when absent) that is returned
 in the response header and appears in every log line as `[req=...]`.
 
+### OpenAPI and Postman
+
+The running service publishes a generated OpenAPI 3 document and Swagger UI:
+
+| Resource | URL |
+|---|---|
+| Swagger UI | `http://localhost:8080/swagger-ui.html` |
+| OpenAPI JSON | `http://localhost:8080/v3/api-docs` |
+
+Every controller operation carries a summary and description, so the published contract
+tracks the code. `OpenApiIntegrationTest` fails if the document disappears or a public
+path is renamed.
+
+A ready-to-run Postman collection is included at
+[`postman/transaction-guard.postman_collection.json`](postman/transaction-guard.postman_collection.json).
+Import it into Postman and run the folders in order:
+
+1. **Ingestion** — single record, out-of-order record, missing predecessor, duplicate replay
+2. **Process and inspect** — worker cycle, transaction detail, list, summary, gaps, stale-claim sweep
+3. **Batch** — mixed valid/invalid batch, processing, rejected record
+4. **Errors** — `400` structural validation, `409` sequence conflict, `409` requeue refusal, `404` unknown id
+
+Collection variables control `baseUrl`. The scenario uses global sequences `1–6` and is
+designed for a fresh database: delete `./data` before a full run so every request is
+applied. Requests assert the status code and response fields documented above. The
+collection was executed end to end with Newman against a local instance.
+
 ---
 
 ## 7. Configuration
@@ -328,7 +357,7 @@ run-tests.cmd
 
 On macOS/Linux use `./run-tests.sh`.
 
-95 tests, all green.
+97 tests, all green.
 
 | Suite | Tests | Focus |
 |---|---|---|
@@ -349,6 +378,7 @@ On macOS/Linux use `./run-tests.sh`.
 | `ScheduledWorkerIntegrationTest` | 1 | no manual trigger: the scheduler drains the feed |
 | `RetryPolicyTest` | 5 | backoff maths, retry budget, microsecond due-time rounding |
 | `TransactionApiIntegrationTest` | 21 | status codes incl. `409`/`404`, batch `207`, filters, errors, history, recovery |
+| `OpenApiIntegrationTest` | 2 | OpenAPI document and Swagger UI expose every public path |
 
 Tests use an in-memory H2 database per context, a simulated settlement gateway with
 deterministic fault injection, and Awaitility for the scheduler test.
@@ -393,5 +423,5 @@ The full reasoning is in [`docs/DESIGN.md`](docs/DESIGN.md). The short version:
 | Sample output | section 5, `docs/SAMPLE_RUN.md` |
 | Test evidence | section 8, `docs/SAMPLE_RUN.md` |
 | Design note | `docs/DESIGN.md` |
-| AI usage note | `docs/AI_USAGE.md` |
+| API contract | `/v3/api-docs`, Swagger UI, `postman/transaction-guard.postman_collection.json` |
 | Requirement traceability | `docs/ASSESSMENT.md` |
