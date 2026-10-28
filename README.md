@@ -4,8 +4,8 @@ A Spring Boot service that ingests a transaction feed which may arrive **out of 
 contain **duplicates**, and hit **transient failures**, and still guarantees that every
 business transaction applies its financial effect **exactly once**.
 
-This is the implementation of the Mphasis FDE L2 assessment *"Idempotent Background
-Transaction Processing Service"* (see `docs/ASSESSMENT.md` for the requirement mapping).
+This is an implementation of the *"Idempotent Background Transaction Processing Service"*
+exercise (see `docs/ASSESSMENT.md` for the requirement mapping).
 
 ---
 

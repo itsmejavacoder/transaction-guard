@@ -552,9 +552,9 @@ Per suite (from `target/surefire-reports`, run on 2026-10-28 after the OpenAPI c
 | | **Total** | **97** | | |
 
 The suite was executed repeatedly during development, including back-to-back runs with
-identical results, to catch order-dependent flakiness. The timings above are from the final
-run; wall-clock times vary with machine load and Spring context startup, so only the counts
-and the zero failure/error total are assertions.
+identical results, to catch order-dependent flakiness. The timings above are from one
+complete run; wall-clock times vary with machine load and Spring context startup, so only
+the counts and the zero failure/error total are assertions.
 
 The concurrency suite is worth calling out explicitly. `IdempotencyIntegrationTest` fires
 12 threads with the same payload and asserts:

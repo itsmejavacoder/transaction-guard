@@ -19,7 +19,7 @@ import java.util.concurrent.locks.ReentrantLock;
 
 /**
  * Feed-level orchestration. Each request gets its own transaction, so one bad record
- * can never roll back the rest of the batch (functional requirement L2-FR-02).
+ * can never roll back the rest of the batch (functional requirement FR-02).
  *
  * <p>Ingestion of one stream is serialised inside the JVM. That is not a throughput
  * compromise for an ordered feed (the sequence gate already only lets one record of a

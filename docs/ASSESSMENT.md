@@ -1,7 +1,7 @@
 # Requirement Traceability
 
-Mapping between the assessment requirement set (FDE L2, *Idempotent Background Transaction
-Processing Service*) and this implementation. Every row points at code and at a test that
+Mapping between the requirements for the *Idempotent Background Transaction Processing
+Service* exercise and this implementation. Every row points at code and at a test that
 fails if the behaviour regresses.
 
 ---
@@ -10,18 +10,18 @@ fails if the behaviour regresses.
 
 | ID | Requirement | Implementation | Evidence |
 |---|---|---|---|
-| L2-FR-01 | Accept requests from a configurable or replaceable input source | `TransactionSource` interface with `JsonFileTransactionSource` and `InMemoryTransactionSource`; HTTP ingestion via `TransactionController`; startup replay configured by `transactionguard.ingestion.startup-file` | `JsonFileTransactionSourceTest` (5), `TransactionApiIntegrationTest` (21) |
-| L2-FR-02 | Validate mandatory fields and reject malformed records | `TransactionRequestValidator` (all findings collected, not fail-fast); `TransactionIngester` persists trackable rejected rows and refuses untrackable ones | `TransactionRequestValidatorTest` (12), `IngestionIntegrationTest.invalidTrackedRecordDoesNotBlockTheStream` |
-| L2-FR-03 | Maintain transaction processing state | `TransactionRecord` persisted with `request_id`/`transaction_id`/`(stream_id, sequence_number)` unique constraints; `TransactionTransition` append-only audit | `IngestionIntegrationTest`, `OrderingIntegrationTest` |
-| L2-FR-04 | Status lifecycle (`RECEIVED`, `PROCESSING`, `PROCESSED`, `DUPLICATE`, `FAILED`, `RETRY_PENDING`) | `TransactionStatus` enum + `TransactionLifecycle` guarded transitions (`IllegalStatusTransitionException`); `FAILED` has exactly one successor, the operator requeue | `TransactionLifecycleTest` (5), `RetryIntegrationTest`, `TransactionApiIntegrationTest` |
-| L2-FR-05 | Process each unique business transaction once | Atomic JPQL claim; unique `transaction_id`; unique `ledger_entry.transaction_id`; idempotent settlement gateway keyed by transaction id | `IdempotencyIntegrationTest` (4) |
-| L2-FR-06 | Detect duplicates even when they arrive later in the batch | Duplicate lookup by `request_id` then `transaction_id` before validation and before persistence; audit row per attempt | `IngestionIntegrationTest`, `IdempotencyIntegrationTest`, `SampleScenarioIntegrationTest` |
-| L2-FR-07 | Define and implement an out-of-order strategy | **Option A**: sequence cursor per stream, `PENDING_PREDECESSOR` buffering, release on predecessor terminal, stale rejection, gap report | `OrderingIntegrationTest` (7), `PerAccountOrderingIntegrationTest` (2), `OrderIndependenceTest` (1) |
-| L2-FR-08 | Simulate at least one retryable failure scenario | `SimulatedSettlementGateway` with per-transaction fault injection (`transactionguard.simulation.transient-failures`); demo injects one failure for `TXN-2005` | `RetryIntegrationTest`, `SampleScenarioIntegrationTest`, demo log |
-| L2-FR-09 | Retry transient failures without duplicate effects | `RetryPolicy` (bounded, exponential, due-time rounded down); effect key idempotency; record-level claim; ledger uniqueness | `RetryIntegrationTest` (5), `RetryBackoffIntegrationTest` (1), `IdempotencyIntegrationTest` |
-| L2-FR-10 | Separate business logic from input handling | Packages `api`, `ingestion`, `validation`, `processing`, `persistence`, `observability`; the processor has no HTTP or JSON knowledge | code structure + package-private seams |
-| L2-FR-11 | Produce a processing summary with counts by status | `GET /api/v1/processing/summary` (`ProcessingSummaryService`) with counts, duplicate/retry pressure, ledger size, net booked amount, balances, gaps; `DUPLICATE` is documented as an API outcome and always `0` in stored counts | `TransactionApiIntegrationTest.summaryReportsCountsAndGaps`, demo output |
-| L2-FR-12 | Tests for duplicate, out-of-order, invalid and retry scenarios | 97 tests across 18 classes | `mvn test` (see `SAMPLE_RUN.md` §3) |
+| FR-01 | Accept requests from a configurable or replaceable input source | `TransactionSource` interface with `JsonFileTransactionSource` and `InMemoryTransactionSource`; HTTP ingestion via `TransactionController`; startup replay configured by `transactionguard.ingestion.startup-file` | `JsonFileTransactionSourceTest` (5), `TransactionApiIntegrationTest` (21) |
+| FR-02 | Validate mandatory fields and reject malformed records | `TransactionRequestValidator` (all findings collected, not fail-fast); `TransactionIngester` persists trackable rejected rows and refuses untrackable ones | `TransactionRequestValidatorTest` (12), `IngestionIntegrationTest.invalidTrackedRecordDoesNotBlockTheStream` |
+| FR-03 | Maintain transaction processing state | `TransactionRecord` persisted with `request_id`/`transaction_id`/`(stream_id, sequence_number)` unique constraints; `TransactionTransition` append-only audit | `IngestionIntegrationTest`, `OrderingIntegrationTest` |
+| FR-04 | Status lifecycle (`RECEIVED`, `PROCESSING`, `PROCESSED`, `DUPLICATE`, `FAILED`, `RETRY_PENDING`) | `TransactionStatus` enum + `TransactionLifecycle` guarded transitions (`IllegalStatusTransitionException`); `FAILED` has exactly one successor, the operator requeue | `TransactionLifecycleTest` (5), `RetryIntegrationTest`, `TransactionApiIntegrationTest` |
+| FR-05 | Process each unique business transaction once | Atomic JPQL claim; unique `transaction_id`; unique `ledger_entry.transaction_id`; idempotent settlement gateway keyed by transaction id | `IdempotencyIntegrationTest` (4) |
+| FR-06 | Detect duplicates even when they arrive later in the batch | Duplicate lookup by `request_id` then `transaction_id` before validation and before persistence; audit row per attempt | `IngestionIntegrationTest`, `IdempotencyIntegrationTest`, `SampleScenarioIntegrationTest` |
+| FR-07 | Define and implement an out-of-order strategy | **Option A**: sequence cursor per stream, `PENDING_PREDECESSOR` buffering, release on predecessor terminal, stale rejection, gap report | `OrderingIntegrationTest` (7), `PerAccountOrderingIntegrationTest` (2), `OrderIndependenceTest` (1) |
+| FR-08 | Simulate at least one retryable failure scenario | `SimulatedSettlementGateway` with per-transaction fault injection (`transactionguard.simulation.transient-failures`); demo injects one failure for `TXN-2005` | `RetryIntegrationTest`, `SampleScenarioIntegrationTest`, demo log |
+| FR-09 | Retry transient failures without duplicate effects | `RetryPolicy` (bounded, exponential, due-time rounded down); effect key idempotency; record-level claim; ledger uniqueness | `RetryIntegrationTest` (5), `RetryBackoffIntegrationTest` (1), `IdempotencyIntegrationTest` |
+| FR-10 | Separate business logic from input handling | Packages `api`, `ingestion`, `validation`, `processing`, `persistence`, `observability`; the processor has no HTTP or JSON knowledge | code structure + package-private seams |
+| FR-11 | Produce a processing summary with counts by status | `GET /api/v1/processing/summary` (`ProcessingSummaryService`) with counts, duplicate/retry pressure, ledger size, net booked amount, balances, gaps; `DUPLICATE` is documented as an API outcome and always `0` in stored counts | `TransactionApiIntegrationTest.summaryReportsCountsAndGaps`, demo output |
+| FR-12 | Tests for duplicate, out-of-order, invalid and retry scenarios | 97 tests across 18 classes | `mvn test` (see `SAMPLE_RUN.md` §3) |
 
 ---
 
