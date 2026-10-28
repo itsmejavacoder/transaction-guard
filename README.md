@@ -16,11 +16,11 @@ Transaction Processing Service"* (see `docs/ASSESSMENT.md` for the requirement m
                  │
                  ▼
    ┌─────────────────────────────┐
+   │ Duplicate detection         │  request id → transaction id, before validation
+   ├─────────────────────────────┤
    │ Validation                  │  structural rules, all findings collected
    ├─────────────────────────────┤
-   │ Duplicate detection         │  request id → transaction id → (stream, sequence)
-   ├─────────────────────────────┤
-   │ Sequence gate (ordering)    │  RECEIVED / PENDING_PREDECESSOR / stale rejection
+   │ Sequence gate (ordering)    │  RECEIVED / PENDING_PREDECESSOR / stale or slot conflict
    ├─────────────────────────────┤
    │ Persist + audit transition  │  one transaction per request
    └──────────────┬──────────────┘
@@ -46,7 +46,7 @@ Guarantees:
 | No double booking even if the effect succeeded and the DB commit failed | gateway is idempotent per effect key; ledger has a unique constraint on `transaction_id` |
 | Ordering per stream | sequence cursor + `(stream_id, sequence_number)` unique constraint + `PENDING_PREDECESSOR` buffering |
 | No silent stuck stream | sequence gap report + audit trail per state change |
-| A dead worker does not lose a record | `PROCESSING` claims older than the visibility timeout return to `RETRY_PENDING` |
+| A dead worker does not lose a record | the claim and effect commit atomically; any `PROCESSING` claim older than the visibility timeout is recovered (`RETRY_PENDING`, or `FAILED` if the budget is spent) |
 | A failed record is recoverable | audited operator requeue (`MANUAL_REQUEUE`) with a fresh retry budget |
 | Transient failures are retried, bad data is not | failure classification, exponential backoff, bounded attempts |
 
@@ -62,7 +62,7 @@ Guarantees:
 | Build | Maven (`pom.xml`, wrapper included) |
 | Metrics | Micrometer counters + gauges via `/actuator` |
 | API docs | springdoc OpenAPI 3 + Swagger UI, Postman collection |
-| Tests | JUnit 5, Spring Boot Test, MockMvc, AssertJ, Awaitility, Mockito |
+| Tests | JUnit 5, Spring Boot Test, MockMvc, AssertJ, Awaitility |
 
 No Lombok, no MapStruct, no XML: the domain is plain Java so the behaviour is explicit.
 
@@ -389,10 +389,11 @@ deterministic fault injection, and Awaitility for the scheduler test.
 
 The full reasoning is in [`docs/DESIGN.md`](docs/DESIGN.md). The short version:
 
-1. **Two-level idempotency.** A replay is caught by `request_id`, then by
-   `transaction_id`, then by `(stream_id, sequence_number)`. Duplicate detection runs
-   *before* validation, so a replay of an already-accepted record is reported as a
-   duplicate rather than as a validation error.
+1. **Three-level protection.** A replay is caught by `request_id`, then by
+   `transaction_id`; a different transaction trying to reuse a consumed
+   `(stream_id, sequence_number)` is refused as a conflict instead of being applied.
+   Duplicate detection runs *before* validation, so a replay of an already-accepted
+   record is reported as a duplicate rather than as a validation error.
 2. **Exactly-once effect.** The claim is a single atomic `UPDATE ... WHERE status IN
    (RECEIVED, RETRY_PENDING)`. The settlement gateway is idempotent per effect key, so a
    crash between the external call and the DB commit is safe to retry. The ledger has a

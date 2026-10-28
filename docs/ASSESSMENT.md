@@ -11,7 +11,7 @@ fails if the behaviour regresses.
 | ID | Requirement | Implementation | Evidence |
 |---|---|---|---|
 | L2-FR-01 | Accept requests from a configurable or replaceable input source | `TransactionSource` interface with `JsonFileTransactionSource` and `InMemoryTransactionSource`; HTTP ingestion via `TransactionController`; startup replay configured by `transactionguard.ingestion.startup-file` | `JsonFileTransactionSourceTest` (5), `TransactionApiIntegrationTest` (21) |
-| L2-FR-02 | Validate mandatory fields and reject malformed records | `TransactionRequestValidator` (all findings collected, not fail-fast); `TransactionIngester` persists trackable rejected rows and refuses untrackable ones | `TransactionRequestValidatorTest` (12), `IngestionIntegrationTest.invalidRecordIsRejectedAndAudited` |
+| L2-FR-02 | Validate mandatory fields and reject malformed records | `TransactionRequestValidator` (all findings collected, not fail-fast); `TransactionIngester` persists trackable rejected rows and refuses untrackable ones | `TransactionRequestValidatorTest` (12), `IngestionIntegrationTest.invalidTrackedRecordDoesNotBlockTheStream` |
 | L2-FR-03 | Maintain transaction processing state | `TransactionRecord` persisted with `request_id`/`transaction_id`/`(stream_id, sequence_number)` unique constraints; `TransactionTransition` append-only audit | `IngestionIntegrationTest`, `OrderingIntegrationTest` |
 | L2-FR-04 | Status lifecycle (`RECEIVED`, `PROCESSING`, `PROCESSED`, `DUPLICATE`, `FAILED`, `RETRY_PENDING`) | `TransactionStatus` enum + `TransactionLifecycle` guarded transitions (`IllegalStatusTransitionException`); `FAILED` has exactly one successor, the operator requeue | `TransactionLifecycleTest` (5), `RetryIntegrationTest`, `TransactionApiIntegrationTest` |
 | L2-FR-05 | Process each unique business transaction once | Atomic JPQL claim; unique `transaction_id`; unique `ledger_entry.transaction_id`; idempotent settlement gateway keyed by transaction id | `IdempotencyIntegrationTest` (4) |
@@ -50,7 +50,7 @@ Option A was chosen: **sequence-based processing**.
 | Processed when prior sequences are available | `SequenceGate.advanceAndRelease` on every terminal transition (`RELEASED_AFTER_PREDECESSOR`) |
 | Missing sequences are reported | `GET /api/v1/processing/sequence-gaps` (first missing, blocked pending, list of holes) |
 
-Trade-off (documented in `DESIGN.md` §5): strict order implies head-of-line blocking, which
+Trade-off (documented in `DESIGN.md` §5.5): strict order implies head-of-line blocking, which
 is bounded by treating every terminal state — including `REJECTED` and `FAILED` — as
 consuming its sequence, and by bounded retries. `Option B` (state machine) is present too,
 as the `TransactionLifecycle` guard, but it is not the ordering mechanism because it cannot
@@ -81,11 +81,11 @@ domain is a feed of financial postings where "last write wins" is unsafe.
 | Out-of-order requests follow a defined strategy | `OrderingIntegrationTest.outOfOrderArrivalIsBuffered`, `ScheduledWorkerIntegrationTest` |
 | Retry is safe and idempotent | `RetryIntegrationTest.workerDrivesRetryToCompletion` (attempts 2, effects 1) |
 | Failed records are recoverable | `RecoveryIntegrationTest`, `TransactionApiIntegrationTest.requeueFailedTransactionReturns202` |
-| Invalid records are isolated | `SampleScenarioIntegrationTest` (`TXN-2004` rejected, others processed), `IngestionIntegrationTest` batch isolation |
+| Invalid records are isolated | `SampleScenarioIntegrationTest` (`TXN-2004` rejected, others processed), `IngestionIntegrationTest.invalidTrackedRecordDoesNotBlockTheStream` |
 | Clear status lifecycle | `TransactionStatus` / `TransactionLifecycle`, exposed in `GET /transactions/{id}` history |
-| Production implications explained | `DESIGN.md` §7 (concurrency), §8 (observability), §12 (trade-offs), §13 (hardening) |
+| Production implications explained | `DESIGN.md` §7 (concurrency), §8 (observability), §11 (trade-offs), §13 (hardening) |
 | API contract published and verified | OpenAPI at `/v3/api-docs` + Swagger UI, `OpenApiIntegrationTest`, Postman collection executed with Newman |
-| Trade-offs and next steps identified | `DESIGN.md` §11–13 |
+| Trade-offs and next steps identified | `DESIGN.md` §11 and §13 |
 
 ---
 

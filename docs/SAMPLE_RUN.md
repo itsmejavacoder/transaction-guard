@@ -294,7 +294,7 @@ Both records were processed in one cycle: the gate released `TXN-1002` immediate
 
 ### 2.2 A missing record versus a slow record
 
-**Step 7 — sequence 4 arrives before 3**
+**Step 7 — sequence 4 arrives before 3** (`out-of-order-seq4.json`)
 
 ```json
 {"requestId":"REQ-1004","transactionId":"TXN-1004","status":"PENDING_PREDECESSOR","duplicate":false,"recorded":true,"message":"Accepted; waiting for earlier sequence in stream GLOBAL","validationIssues":[],"occurredAt":"2026-10-28T13:30:03.291798300Z","sequenceNumber":4,"streamId":"GLOBAL"}
@@ -306,7 +306,7 @@ Both records were processed in one cycle: the gate released `TXN-1002` immediate
 [{"streamId":"GLOBAL","nextExpectedSequence":3,"firstPendingSequence":4,"missingCount":1,"missingSequences":[3]}]
 ```
 
-**Step 9 — sequence 3 arrives**
+**Step 9 — sequence 3 arrives** (`out-of-order-seq3.json`)
 
 ```json
 {"requestId":"REQ-1003","transactionId":"TXN-1003","status":"RECEIVED","duplicate":false,"recorded":true,"message":"Accepted for processing","validationIssues":[],"occurredAt":"2026-10-28T13:30:03.359184800Z","sequenceNumber":3,"streamId":"GLOBAL"}
@@ -531,29 +531,30 @@ Per suite (from `target/surefire-reports`, run on 2026-10-28 after the OpenAPI c
 
 | # | Suite | Tests | Time | What it proves |
 |---|---|---|---|---|
-| 1 | `TransactionRequestValidatorTest` | 12 | 0.012 s | every structural rule, all issues collected, trackability |
-| 2 | `TransactionLifecycleTest` | 5 | 0.036 s | legal/illegal transitions, operator-only `FAILED` requeue |
-| 3 | `JsonFileTransactionSourceTest` | 5 | 0.089 s | feed parsing, malformed feeds, duplicate ids inside one file |
-| 4 | `SensitiveDataMaskerTest` | 3 | 0.000 s | account ids are masked in logs |
-| 5 | `IngestionIntegrationTest` | 10 | 1.825 s | accept, replay, ambiguous ids, invalid rows, stale sequences, audit |
-| 6 | `OrderingIntegrationTest` | 7 | 0.502 s | buffering, release, gaps, rejection, failed record advances cursor |
-| 7 | `PerAccountOrderingIntegrationTest` | 2 | 1.110 s | independent streams when `scope=PER_ACCOUNT` |
-| 8 | `OrderIndependenceTest` | 1 | 1.417 s | shuffled feed → identical financial state |
-| 9 | `IdempotencyIntegrationTest` | 4 | 0.448 s | 12 concurrent identical submissions → one effect |
-| 10 | `RetryIntegrationTest` | 5 | 0.161 s | retry-then-success, exhaustion, failure does not block stream |
-| 11 | `RetryBackoffIntegrationTest` | 1 | 0.700 s | a retry is not claimable before its backoff elapses |
-| 12 | `RecoveryIntegrationTest` | 5 | 0.218 s | requeue, abandoned-claim recovery, stale budget exhaustion |
-| 13 | `RetryPolicyTest` | 5 | 0.000 s | backoff maths, budget, microsecond rounding |
-| 14 | `ReversalIntegrationTest` | 5 | 0.166 s | reversal rules (original, currency, amount, no reversal-of-reversal) |
-| 15 | `SampleScenarioIntegrationTest` | 3 | 0.287 s | the assessment sample end to end |
-| 16 | `ScheduledWorkerIntegrationTest` | 1 | 0.628 s | no manual trigger: the scheduler drains the feed |
-| 17 | `TransactionApiIntegrationTest` | 21 | 11.230 s | status codes incl. `409`/`404`, batch `207`, filters, history, recovery |
-| 18 | `OpenApiIntegrationTest` | 2 | 12.910 s | OpenAPI document and Swagger UI expose every public path |
+| 1 | `TransactionRequestValidatorTest` | 12 | 0.020 s | every structural rule, all issues collected, trackability |
+| 2 | `TransactionLifecycleTest` | 5 | 0.044 s | legal/illegal transitions, operator-only `FAILED` requeue |
+| 3 | `JsonFileTransactionSourceTest` | 5 | 0.152 s | feed parsing, malformed feeds, duplicate ids inside one file |
+| 4 | `SensitiveDataMaskerTest` | 3 | 0.016 s | account ids are masked in logs |
+| 5 | `IngestionIntegrationTest` | 10 | 4.088 s | accept, replay, ambiguous ids, invalid rows, stale sequences, audit |
+| 6 | `OrderingIntegrationTest` | 7 | 1.001 s | buffering, release, gaps, rejection, failed record advances cursor |
+| 7 | `PerAccountOrderingIntegrationTest` | 2 | 1.545 s | independent streams when `scope=PER_ACCOUNT` |
+| 8 | `OrderIndependenceTest` | 1 | 2.625 s | shuffled feed → identical financial state |
+| 9 | `IdempotencyIntegrationTest` | 4 | 0.700 s | 12 concurrent identical submissions → one effect |
+| 10 | `RetryIntegrationTest` | 5 | 0.279 s | retry-then-success, exhaustion, failure does not block stream |
+| 11 | `RetryBackoffIntegrationTest` | 1 | 1.161 s | a retry is not claimable before its backoff elapses |
+| 12 | `RecoveryIntegrationTest` | 5 | 0.257 s | requeue, abandoned-claim recovery, stale budget exhaustion |
+| 13 | `RetryPolicyTest` | 5 | 0.013 s | backoff maths, budget, microsecond rounding |
+| 14 | `ReversalIntegrationTest` | 5 | 0.259 s | reversal rules (original, currency, amount, no reversal-of-reversal) |
+| 15 | `SampleScenarioIntegrationTest` | 3 | 0.408 s | the assessment sample end to end |
+| 16 | `ScheduledWorkerIntegrationTest` | 1 | 1.098 s | no manual trigger: the scheduler drains the feed |
+| 17 | `TransactionApiIntegrationTest` | 21 | 4.017 s | status codes incl. `409`/`404`, batch `207`, filters, history, recovery |
+| 18 | `OpenApiIntegrationTest` | 2 | 14.290 s | OpenAPI document and Swagger UI expose every public path |
 | | **Total** | **97** | | |
 
-The pre-recovery suite was executed twice back to back with identical results to catch
-order-dependent flakiness; the current suite was then run again in full after the recovery
-changes.
+The suite was executed repeatedly during development, including back-to-back runs with
+identical results, to catch order-dependent flakiness. The timings above are from the final
+run; wall-clock times vary with machine load and Spring context startup, so only the counts
+and the zero failure/error total are assertions.
 
 The concurrency suite is worth calling out explicitly. `IdempotencyIntegrationTest` fires
 12 threads with the same payload and asserts:

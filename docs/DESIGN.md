@@ -186,8 +186,8 @@ original was accepted (for example, a newly introduced currency rule would turn 
 replay into a `422`). Business idempotency wins: if the platform has already seen this
 transaction, report the original outcome.
 
-The reverse case is also handled: a malformed duplicate of a malformed original is still
-reported as invalid, because nothing was ever accepted.
+The reverse case is also handled: if the original was untrackable and therefore never
+persisted, a replay is judged again and still reported as invalid.
 
 ### 4.3 Exactly-once effect
 
@@ -216,21 +216,24 @@ Three mechanisms compose:
 | Failure point | State after crash | Recovery |
 |---|---|---|
 | before claim | `RECEIVED` / `RETRY_PENDING` | next cycle claims it |
-| after claim, before gateway | `PROCESSING` (stuck) | scheduled/startup stale-claim sweep resets claims older than the visibility timeout to `RETRY_PENDING`; see §6.5 |
-| after gateway, before commit | `RETRY_PENDING` (claim rolled back) | retry calls the gateway again; duplicate effect suppressed |
-| after commit, before audit write | same transaction | audit is written in the same transaction, so it commits or rolls back together |
-| after commit, before cursor advance | record `PROCESSED`, cursor behind | next cycle sees a terminal record at the expected sequence and advances |
+| during processing, before commit | transaction rolls back to the pre-claim status; an external effect may already exist | next cycle re-claims it; the gateway suppresses the duplicate effect by key |
+| after commit | record, ledger/balance and cursor are committed together | nothing to do |
+| `PROCESSING` row found later (defensive) | abandoned/incomplete claim | scheduled/startup stale-claim sweep recovers claims older than the visibility timeout to `RETRY_PENDING`, or `FAILED` if the budget is spent; see §6.5 |
 
 The important design decision is that **the external effect happens before the local
-booking**, inside the claim transaction, and the gateway is idempotent. The alternative
-(book first, settle after) would require compensating transactions.
+booking**, inside the processing transaction, and the gateway is idempotent. A rollback or
+crash after the call therefore leads to a safe retry rather than a double settlement. The
+alternative (book first, settle after) would require compensating transactions. The
+stale-claim sweep is defence in depth: in the normal path the claim and the booking share
+one transaction, so a crash rolls the claim back; any `PROCESSING` row that is nevertheless
+left behind is recovered after the visibility timeout.
 
 ### 4.5 Concurrent duplicate submissions
 
 Twelve threads submitting the identical request are a realistic replay-storm test. Three
 layers cooperate:
 
-* ingestion of one stream is serialised in-process (see §8.1), which removes the
+* ingestion of one stream is serialised in-process (see §7.1), which removes the
   self-inflicted race on the cursor and on the unique keys;
 * unique constraints still arbitrate if another instance races;
 * `TransactionFeedService` retries a lost unique-key race up to 10 times with a 5 ms
@@ -280,10 +283,12 @@ it never had. Two refusals cover the cases, both with `recorded=false`:
 | `SEQUENCE_CONFLICT` | the same account already has a record on that sequence number | `409` |
 | `STALE_SEQUENCE` | the stream watermark has passed the sequence (for example the slot was consumed by a rejected record of another account in a global stream) | `409` |
 
-Nothing is written to `transaction_record`, so the slot and the cursor are untouched. The
-refusal itself is still written to the audit trail (the recorder keys transitions by
+Nothing is written to `transaction_record`, so the slot and the cursor are untouched.
+A stale refusal is still written to the audit trail (the recorder keys transitions by
 transaction id, not by foreign key), which is what lets an operator answer "why was this
-record not accepted?" without application logs.
+record not accepted?" without application logs. A sequence-slot conflict is answered
+synchronously and logged, but no audit row is written because the request never owned the
+slot.
 
 ### 5.4 Gap reporting
 
@@ -334,7 +339,7 @@ proves the per-account mode with two accounts advancing independently.
 | `TransientSettlementException` | downstream timeout / 5xx | retry with backoff |
 | `BusinessRuleViolationException` | insufficient funds, currency mismatch, reversal rules | terminal `REJECTED`, gateway never called |
 | structural `ValidationIssue`s | bad payload | terminal `REJECTED` at ingestion |
-| unexpected `RuntimeException` | bug | `ProcessingFailureHandler` marks `FAILED`, audit `UNEXPECTED_FAILURE`, stream advanced |
+| unexpected `RuntimeException` | bug | `ProcessingFailureHandler` marks `FAILED` with `UNEXPECTED_PROCESSING_ERROR`, audit `RETRY_EXHAUSTED`, stream advanced |
 
 Retrying a business failure would be wrong: the answer will not change, and the stream would
 stall for nothing.
@@ -386,12 +391,15 @@ idempotent claim and gateway:
 `409 NOT_REQUEUEABLE`, and an unknown id returns `404`. The audit trail therefore distinguishes
 "failed by itself" from "an operator decided to try again".
 
-**Abandoned claims.** A worker that dies between `claim` and commit leaves a record in
-`PROCESSING`. A sweep (`TransactionRecoveryService.recoverStaleClaims`) finds `PROCESSING`
-rows whose `updated_at` is older than `transactionguard.recovery.stale-claim-timeout`
-(default `5m`) and returns them to `RETRY_PENDING` (`STALE_CLAIM_RECOVERED`). If the record
-has already consumed its retry budget it becomes `FAILED` with `STALE_CLAIM_EXHAUSTED`,
-because a record that repeatedly kills its worker must not be retried forever.
+**Abandoned claims.** A record found in `PROCESSING` past the visibility timeout is
+treated as abandoned, regardless of how it got there. A sweep
+(`TransactionRecoveryService.recoverStaleClaims`) finds `PROCESSING` rows whose `updated_at`
+is older than `transactionguard.recovery.stale-claim-timeout` (default `5m`) and returns
+them to `RETRY_PENDING` (`STALE_CLAIM_RECOVERED`). If the record has already consumed its
+retry budget it becomes `FAILED` with `STALE_CLAIM_EXHAUSTED`, because a record that
+repeatedly kills its worker must not be retried forever. In the normal path the claim,
+effect and booking commit in one transaction, so a crash rolls the claim back; the sweep is
+defence in depth for any `PROCESSING` row that is nevertheless left behind.
 
 The sweep runs at startup, on a fixed-delay schedule, and on demand through
 `POST /api/v1/processing/recover-stale`. Each candidate is recovered in its own transaction,
@@ -582,7 +590,7 @@ account_balance
 
 | Requirement | How it is proven |
 |---|---|
-| duplicate request → one effect | `IdempotencyIntegrationTest.concurrentDuplicateSubmissionsAreIdempotent` (12 threads), `...SameRequestIdIsDuplicate` |
+| duplicate request → one effect | `IdempotencyIntegrationTest.concurrentDuplicateSubmissionsAreIdempotent` (12 threads), `IngestionIntegrationTest.duplicateRequestIsSuppressed` |
 | same transaction, new request id | `differentRequestIdSameTransactionIsOneEffect` |
 | out-of-order delivery | `OrderingIntegrationTest.outOfOrderArrivalIsBuffered` |
 | shuffled feed, same result | `OrderIndependenceTest` |
@@ -598,10 +606,11 @@ account_balance
 | validation rules | `TransactionRequestValidatorTest` (12 cases) |
 | reversal rules | `ReversalIntegrationTest` (5 cases) |
 
-The suite is 97 tests across 18 classes. Tests run against real Spring contexts, a real
-(in-memory) database and the real scheduler. Nothing about the concurrency or ordering
-behaviour is mocked — only the external settlement system, which is exactly the boundary
-the design isolates.
+The suite is 97 tests across 18 classes. Tests run against real Spring contexts and an
+in-memory database. The scheduler test runs the real scheduled worker; the other
+integration tests drive cycles synchronously so they stay deterministic. Nothing about the
+concurrency or ordering behaviour is mocked — only the external settlement system, which is
+exactly the boundary the design isolates.
 
 ---
 
@@ -661,8 +670,8 @@ relative to `/api/v1`.
 7. `TransactionProcessor.process` runs one business transaction:
    defensive `effect_applied` check → signed amount (credit/debit/reversal rules) →
    pessimistic lock on the account balance → currency and funds checks → idempotent
-   settlement gateway call keyed by `transaction_id` → unique ledger insert → balance
-   update → record `PROCESSED`.
+   settlement gateway call keyed by `transaction_id` → balance update → unique ledger
+   insert → record `PROCESSED`.
 8. In the same transaction, `SequenceGate.advanceAndRelease` moves the cursor across
    consecutive terminal rows and promotes the first waiting `PENDING_PREDECESSOR` record
    to `RECEIVED`.
@@ -678,7 +687,8 @@ without consulting logs.
 A replay is recognised at the widest key first: a known `request_id` is a duplicate of
 that submission, then a known `transaction_id` is a replay of the same business
 transaction (even with a new delivery id). Detection runs before validation so a replay
-of a previously rejected record is reported as a duplicate, not re-judged.
+of a previously stored rejected record is reported as a duplicate, not re-judged; an
+untrackable original was never stored, so its replay is validated again.
 
 The original row is **not** claimed again and no second effect is scheduled. The response
 is `200` with `duplicate=true`, the original state in `message`, and a
@@ -701,11 +711,11 @@ row cannot block the feed forever.
 
 ### 14.4 Transient failure and retry
 
-The settlement gateway can time out. A `TransientSettlementException` aborts the claim
-transaction, so no ledger row or balance change survives. `ProcessingFailureHandler`
-moves the record to `RETRY_PENDING` with `next_attempt_at` from `RetryPolicy`
-(exponential, capped, deterministic) and writes `RETRY_SCHEDULED`. The claim query honours
-that due time, so a retry is not attempted early.
+The settlement gateway can time out. A `TransientSettlementException` is caught inside the
+processing transaction: the record is moved to `RETRY_PENDING` with `next_attempt_at` from
+`RetryPolicy` (exponential, capped, deterministic) and `RETRY_SCHEDULED` is audited. No
+ledger row or balance change is committed. The claim query honours that due time, so a
+retry is not attempted early.
 
 Retrying is safe because the gateway suppresses a second effect for the same effect key
 and the ledger has a unique `transaction_id`. After `max-attempts`, the record becomes
@@ -718,12 +728,14 @@ and the ledger has a unique `transaction_id`. After `max-attempts`, the record b
 budget, `attempt_count = 0`, cleared failure fields and a `MANUAL_REQUEUE` audit row.
 Anything other than `FAILED` returns `409 NOT_REQUEUEABLE`; an unknown id returns `404`.
 
-A worker that dies between claim and commit leaves a record in `PROCESSING`. The startup
-sweep, the scheduled sweep and `POST /processing/recover-stale` find claims older than
+A record found in `PROCESSING` past the visibility timeout is treated as abandoned,
+regardless of how it got there. The startup sweep, the scheduled sweep and
+`POST /processing/recover-stale` find claims older than
 `transactionguard.recovery.stale-claim-timeout` (default `5m`). A claim with budget left
 returns to `RETRY_PENDING` (`STALE_CLAIM_RECOVERED`); an exhausted one becomes `FAILED`
 with `STALE_CLAIM_EXHAUSTED`. Both paths are audited, and the sweep runs per record so
-one poison record cannot abort the others.
+one poison record cannot abort the others. In the normal path the claim and the booking
+commit together, so a crash rolls the claim back; the sweep is defence in depth.
 
 ### 14.6 Batch and file ingestion
 
